@@ -5,10 +5,10 @@
 适用于 Portainer 的 Docker Standalone 环境。直接使用 Docker Hub 镜像，无需本机构建：
 
 ```bash
-docker pull shiningth/tgbot:2026.10.29.1
+docker pull shiningth/tgbot:latest
 ```
 
-在 Portainer → Stacks → Add stack → Web editor 中粘贴项目根目录的 `portainer-stack.yml`。在 Environment variables 设置 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`；设置 `TGBOT_DATA_DIR` 为宿主机上的数据目录（默认 `/opt/tgbot`）；可选 `ADMIN_PORT`（默认 8088）、`ADMIN_BIND_IP`（默认 0.0.0.0）。部署后访问 `http://服务器IP:8088`。首次部署会从 Docker Hub 拉取镜像，更新时可更换版本标签并重新拉取。
+在 Portainer → Stacks → Add stack → Web editor 中粘贴项目根目录的 `portainer-stack.yml`。在 Environment variables 设置 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`；设置 `TGBOT_DATA_DIR` 为宿主机上的数据目录（默认 `/opt/tgbot`）；可选 `ADMIN_PORT`（默认 8088）、`ADMIN_BIND_IP`（默认 0.0.0.0）。部署后访问 `http://服务器IP:8088`。镜像只提供 `latest`（不再保留历史版本 tag）：首次部署从 Docker Hub 拉取，更新时重新 `docker pull shiningth/tgbot:latest` 并重建容器即可。
 
 申请自己的 Telegram `api_id`、`api_hash` 和机器人 Token，请按 [Telegram API 获取步骤](telegram-api.md) 操作。需要本机构建时可使用 `docker build -t telegrambot:local .` 并相应修改堆栈镜像名。
 
@@ -32,7 +32,7 @@ TGBOT_DATA_DIR/
 | `${TGBOT_DATA_DIR}/sessions` | `/app/sessions` | Telegram 登录会话 |
 | `${TGBOT_DATA_DIR}/runtime` | `/app/runtime` | 数据库、状态、日志及临时文件 |
 
-更新时保留 `TGBOT_DATA_DIR`、挂载和以下启动参数，只修改镜像标签或重新拉取镜像：
+更新时保留 `TGBOT_DATA_DIR`、挂载和以下启动参数，只重新拉取 `latest` 镜像并重建容器：
 
 ```yaml
 command: ["python", "-m", "telegram_bot", "--config", "/data/config/config.json"]

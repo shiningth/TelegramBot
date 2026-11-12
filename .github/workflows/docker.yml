@@ -1,0 +1,69 @@
+name: build-and-publish
+
+# 手动触发时填版本号；打 v* 标签时自动取标签名当版本号
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像版本号，例如 2026.11.12.6'
+        required: true
+  push:
+    tags:
+      - 'v*'
+
+env:
+  IMAGE: shiningth/tgbot
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $VERSION"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 构建：GitHub runner 在海外，这里换回官方源，别用 tuna 镜像
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          build-args: |
+            DEBIAN_MIRROR=http://deb.debian.org
+            PIP_INDEX_URL=https://pypi.org/simple
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 与本地 build-image.sh 一致的冒烟检查：字节码编译必须通过
+      - name: Smoke check
+        run: docker run --rm --network none --entrypoint python "$IMAGE:${{ steps.meta.outputs.version }}" -m compileall -q /app/telegram_bot
+
+      - name: Push
+        run: |
+          docker push "$IMAGE:${{ steps.meta.outputs.version }}"
+          docker push "$IMAGE:latest"
+
+      - name: Summary
+        run: |
+          echo "已发布 $IMAGE:${{ steps.meta.outputs.version }} 与 :latest" >> "$GITHUB_STEP_SUMMARY"
+          docker image inspect "$IMAGE:${{ steps.meta.outputs.version }}" --format '{{index .RepoDigests 0}}' >> "$GITHUB_STEP_SUMMARY"

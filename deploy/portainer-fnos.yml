@@ -1,0 +1,29 @@
+# 当前 fnOS 主机的持久化布局，沿用已有配置和 Telegram 会话。
+services:
+  telegrambot:
+    image: shiningth/tgbot:latest
+    container_name: tgbot
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "telegram_bot", "--config", "/data/config/config.json"]
+    environment:
+      TZ: Asia/Shanghai
+      TGBOT_ADMIN_HOST: 0.0.0.0
+      TGBOT_ADMIN_PORT: "8088"
+    ports:
+      - "192.0.2.10:8088:8088"
+    volumes:
+      - /vol3/1000/SSD/Docker/telegrambot:/data
+      - /vol3/1000/SSD/Docker/telegrambot/sessions:/app/sessions
+      - /vol3/1000/SSD/Docker/telegrambot/runtime:/app/runtime
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/login', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

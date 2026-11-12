@@ -1,0 +1,28 @@
+# Docker Standalone 环境；设置 ADMIN_USERNAME 和 ADMIN_PASSWORD 后部署。
+# 镜像由 build-image.sh 在本地构建，禁止从 registry 拉取。
+services:
+  telegrambot:
+    image: shiningth/tgbot:latest
+    container_name: tgbot
+    pull_policy: never
+    command: ["python", "-m", "telegram_bot", "--config", "/data/config/config.json"]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    ports:
+      - "${ADMIN_BIND_IP:-0.0.0.0}:${ADMIN_PORT:-8088}:8088"
+    environment:
+      TZ: Asia/Shanghai
+      TGBOT_ADMIN_HOST: 0.0.0.0
+      TGBOT_ADMIN_PORT: "8088"
+      TGBOT_ADMIN_USERNAME: "${ADMIN_USERNAME:?请设置后台用户名}"
+      TGBOT_ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请设置后台密码}"
+    volumes:
+      - ${TGBOT_DATA_DIR:-/opt/tgbot}:/data
+      - ${TGBOT_DATA_DIR:-/opt/tgbot}/sessions:/app/sessions
+      - ${TGBOT_DATA_DIR:-/opt/tgbot}/runtime:/app/runtime
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

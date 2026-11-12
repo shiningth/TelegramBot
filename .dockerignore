@@ -1,0 +1,14 @@
+*
+!Dockerfile
+!requirements.txt
+!telegram_bot/
+!telegram_bot/**
+**/__pycache__
+**/*.pyc
+!requirements.lock
+!README.md
+!scripts/
+!scripts/**
+!docs/
+!docs/telegram-api.md
+!docs/deployment.md

@@ -216,6 +216,7 @@ class CheckinModule:
                     f"截止 {self._catchup_minutes()} 分钟内），成功后再告诉你。",
                     kind="fail",
                     key=key,
+                    now=now,
                 )
             elif count >= self._max_attempts():
                 logger.error(
@@ -232,6 +233,7 @@ class CheckinModule:
                     f"今天的这次签到需要手动补。",
                     kind="giveup",
                     key=key,
+                    now=now,
                 )
             return
         previous = int((self.attempts.get(key) or {}).get("count") or 0)
@@ -252,6 +254,7 @@ class CheckinModule:
                 f"此前失败 {previous} 次。",
                 kind="recovered",
                 key=key,
+                now=now,
             )
 
     def _max_attempts(self) -> int:
@@ -281,7 +284,9 @@ class CheckinModule:
         chat_id = str(getattr(self.config, "notify_chat_id", "") or "").strip()
         return (token or self._notify_token_default, chat_id or self._notify_chat_default)
 
-    async def _notify(self, text: str, *, kind: str, key: str) -> None:
+    async def _notify(
+        self, text: str, *, kind: str, key: str, now: datetime | None = None
+    ) -> None:
         """失败/补发/放弃各通知一次，同一 key 同类只发一次。"""
         if not bool(getattr(self.config, "notify_enabled", True)):
             return
@@ -299,7 +304,8 @@ class CheckinModule:
         ok = await send_bot_message_async(token, chat_id, text)
         if ok and notified is not None:
             notified[kind] = time.time()
-            self._save_state(datetime.now())
+            # 用这一次 tick 的时间来保存，否则跨零点时 notified 会被当日过滤掉、导致重复通知
+            self._save_state(now)
 
     def _record_attempt(self, key: str, now: datetime, *, error: str) -> int:
         entry = self.attempts.get(key) or {"count": 0}

@@ -23,7 +23,16 @@ DEFAULT_UA = (
 )
 
 _CF_MARKERS = ("Just a moment", "cf-browser-verification", "challenges.cloudflare.com", "Attention Required")
-_LOGIN_MARKERS = ("login.php", "takelogin", "请先登录", "请登录后", "你还没有登录")
+_LOGIN_MARKERS = (
+    "login.php",
+    "takelogin",
+    "请先登录",
+    "请登录后",
+    "你还没有登录",
+    "未登录",
+    "必须在登录后",
+    "该页面必须在登录",
+)
 _ALREADY_MARKERS = (
     "已经签到",
     "已签到",
@@ -34,7 +43,9 @@ _ALREADY_MARKERS = (
     "已打过卡",
     "今天已经签到",
 )
-_SIGNED_MARKERS = ("签到成功", "签到已得", "获得", "签到奖励", "已获得", "魔力值增加")
+_SIGNED_MARKERS = ("签到成功", "签到已得", "本次签到获得", "签到奖励", "魔力值增加")
+_TURNSTILE_MARKERS = ("cf-turnstile", "data-sitekey", "challenges.cloudflare.com/turnstile")
+_COUNT_RE = re.compile(r"第\s*(\d+)\s*次签到")
 
 _FORM_RE = re.compile(r"<form\b[\s\S]*?</form>", re.IGNORECASE)
 _INPUT_RE = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
@@ -134,6 +145,9 @@ def classify(
         return "login", "Cookie 失效或未登录"
     if "dragContainer" in html or "滑动认证" in text or "set_access_token-" in html:
         return "slider", "滑动认证"
+    lowered = (html or "").lower()
+    if any(marker in lowered for marker in _TURNSTILE_MARKERS):
+        return "captcha", "需要 Cloudflare Turnstile 验证"
     for word in _keywords(success_keywords) + list(_SIGNED_MARKERS):
         if word and word in text:
             return "signed", _snippet(text, word)
@@ -275,6 +289,28 @@ def sign_site(
 
             if state == "login":
                 result.detail = "Cookie 已失效，请重新复制"
+                return _finish(result, started)
+
+            if state == "captcha":
+                solved = ""
+                if flaresolverr:
+                    solved = _fetch_via_flaresolverr(url, flaresolverr, timeout)
+                if solved:
+                    html = solved
+                    state, why = classify(
+                        html,
+                        final_url=result.final_url,
+                        success_keywords=success_keywords,
+                        already_keywords=already_keywords,
+                    )
+                    result.debug_html = html[:6000]
+                    result.page_text = page_text(html)[:400]
+                    if state in ("already", "signed"):
+                        result.state = state
+                        result.detail = why or "签到成功"
+                        return _finish(result, started)
+                result.state = "captcha"
+                result.detail = "需要 Cloudflare Turnstile 验证（脚本过不去，需要浏览器）"
                 return _finish(result, started)
 
             if state == "slider" and method in ("auto", "slider"):

@@ -313,6 +313,11 @@ class TelegramBotApplication:
         if "enabled" in values:
             enabled = bool(values["enabled"])
             module.card.enabled = enabled
+            # 模块自己的 config.enabled 也要跟着变：site_checkin 的定时循环检查的就是它，
+            # 只在面板打开开关、而 config.enabled 还是 False 时，任务会「启动但不干活」。
+            module_config = getattr(module, "config", None)
+            if module_config is not None and hasattr(module_config, "enabled"):
+                setattr(module_config, "enabled", enabled)
             if hasattr(self.config.modules, module_id):
                 setattr(self.config.modules, module_id, enabled)
             if module_id == "ai_reply":

@@ -231,19 +231,21 @@ def create_default_registry(
         chat_id=getattr(config.ltx_watch, "notify_chat_id", ""),
     )
     registry.register(checkin_module)
-    registry.register(
-        SiteCheckinModule(
-            ModuleCard(
-                id="site_checkin",
-                name="站点签到",
-                description="用 Cookie 直接请求 PT 站/论坛的签到页，按 Cron 执行并记录日志。",
-                category="automation",
-                enabled=config.modules.site_checkin,
-            ),
-            config.site_checkin,
-            project_root,
-        )
+    site_checkin_module = SiteCheckinModule(
+        ModuleCard(
+            id="site_checkin",
+            name="站点签到",
+            description="用 Cookie 直接请求 PT 站/论坛的签到页，按 Cron 执行并记录日志。",
+            category="automation",
+            enabled=config.modules.site_checkin,
+        ),
+        config.site_checkin,
+        project_root,
     )
+    site_checkin_module.set_flaresolverr_default(
+        getattr(config.ltx_watch, "metadata_flaresolverr", "")
+    )
+    registry.register(site_checkin_module)
     registry.register(
         AutoForwardModule(
             ModuleCard(

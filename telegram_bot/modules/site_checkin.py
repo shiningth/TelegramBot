@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -35,10 +36,17 @@ STATE_LABELS = {
     "already": "今日已签",
     "login": "登录失效",
     "slider": "滑块未过",
+    "captcha": "需要人机验证",
     "failed": "失败",
     "unknown": "未知",
 }
 _STATE_VERSION = 1
+_COUNT_RE = re.compile(r"第\s*(\d+)\s*次")
+
+
+def _sign_count(detail: str) -> int | None:
+    match = _COUNT_RE.search(detail or "")
+    return int(match.group(1)) if match else None
 
 
 def _daily_cron_time(expression: str) -> tuple[int, int] | None:
@@ -243,6 +251,22 @@ class SiteCheckinModule:
             tmp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(path)
 
+    def _refine_already(
+        self, site: SiteCheckinSiteConfig, result: SignResult
+    ) -> SignResult:
+        """签到页永远显示「上一次签到结果」，靠次数是否变化判断今天签没签。"""
+        if result.state != "signed":
+            return result
+        count = _sign_count(result.detail)
+        if count is None:
+            return result
+        previous = (self._state.get("last") or {}).get(site.id) or {}
+        same_day = str(previous.get("at") or "")[:10] == datetime.now().strftime("%Y-%m-%d")
+        if same_day and previous.get("count") == count:
+            result.state = "already"
+            result.detail = f"今日已签（第 {count} 次）"
+        return result
+
     def _record(self, site: SiteCheckinSiteConfig, result: SignResult) -> dict[str, Any]:
         now = datetime.now()
         entry = {
@@ -254,6 +278,7 @@ class SiteCheckinModule:
             "detail": result.detail[:64],  # 日志只留一句，完整页面另存 debug_html
             "http": result.http,
             "ms": result.elapsed_ms,
+            "count": _sign_count(result.detail),
         }
         self._state.setdefault("logs", []).insert(0, entry)
         self._state["logs"] = self._state["logs"][:_LOG_LIMIT]
@@ -302,6 +327,7 @@ class SiteCheckinModule:
             if not is_due(site, now, last_run):
                 continue
             result = await self._run(site)
+            result = self._refine_already(site, result)
             self._record(site, result)
             await self._notify(site, result)
             self._sync_card()
@@ -312,6 +338,7 @@ class SiteCheckinModule:
         if site is None:
             return {"ok": False, "error": "没有这个站点"}
         result = await self._run(site)
+        result = self._refine_already(site, result)
         entry = self._record(site, result)
         self._sync_card()
         return {
@@ -322,6 +349,11 @@ class SiteCheckinModule:
             "page": result.page_text,
             "final_url": result.final_url,
         }
+
+    def set_flaresolverr_default(self, endpoint: str) -> None:
+        """站点签到自己没填 FlareSolverr 时，沿用磁力导入那台的地址。"""
+        if not self.config.flaresolverr and endpoint:
+            self.config.flaresolverr = endpoint
 
     async def _run(self, site: SiteCheckinSiteConfig) -> SignResult:
         logger.info("站点签到开始：%s (%s)", site.name or site.id, site.url)

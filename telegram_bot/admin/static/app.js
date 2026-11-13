@@ -2249,7 +2249,15 @@ function siteCheckinCard(site) {
     </section>`;
 }
 
-const SITE_STATE_LABELS = { signed: "成功", already: "今日已签", failed: "失败" };
+const SITE_STATE_LABELS = {
+  signed: "成功",
+  already: "今日已签",
+  login: "Cookie 失效",
+  slider: "滑块未过",
+  captcha: "需要人机验证",
+  failed: "失败",
+  unknown: "未知",
+};
 
 function showSiteCheckinSettings(module) {
   const config = (module && module.config) || {};

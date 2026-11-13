@@ -129,3 +129,47 @@ def test_handle_message_returns_ignored_with_module_id(tmp_path):
     assert result.status == 'ignored'
     assert result.module_id == 'site_checkin'
 
+
+
+def test_classify_flags_turnstile_as_captcha():
+    from telegram_bot.shared.sitecheckin import classify
+
+    html = (
+        '<form method="POST" id="attendance">'
+        '<div class="cf-turnstile" data-sitekey="0x4AAAAAAADWQPWY98KpMVND"></div>'
+        "</form><p>请耐心等待签到验证程序加载.....</p>"
+        "<p>首次签到获得 10 个魔力值。</p>"
+    )
+    state, why = classify(html, final_url="https://ourbits.club/attendance.php")
+    assert state == "captcha"
+    assert "Turnstile" in why
+
+
+def test_classify_ignores_rule_text_about_bonus():
+    from telegram_bot.shared.sitecheckin import classify
+
+    html = "<p>首次签到获得 10 个魔力值，每次签到可额外获得 1 个魔力值。</p>"
+    state, _ = classify(html, final_url="https://example.com/attendance.php")
+    assert state == "unknown"
+
+
+def test_refine_already_uses_sign_count(tmp_path):
+    module = make_module(tmp_path)
+    site = module.config.sites[0]
+    first = SignResult(state="signed", detail="签到成功 这是您的第 1201 次签到，已连续签到 4 天", http=200)
+    module._record(site, module._refine_already(site, first))
+    again = SignResult(state="signed", detail="签到成功 这是您的第 1201 次签到，已连续签到 4 天", http=200)
+    refined = module._refine_already(site, again)
+    assert refined.state == "already"
+    assert "1201" in refined.detail
+
+
+def test_refine_keeps_signed_when_count_grows(tmp_path):
+    from datetime import datetime, timedelta
+
+    module = make_module(tmp_path)
+    site = module.config.sites[0]
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    module._state.setdefault("last", {})[site.id] = {"at": yesterday, "count": 1200, "state": "signed"}
+    fresh = SignResult(state="signed", detail="签到成功 这是您的第 1201 次签到", http=200)
+    assert module._refine_already(site, fresh).state == "signed"

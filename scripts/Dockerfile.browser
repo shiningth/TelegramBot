@@ -1,0 +1,27 @@
+# 带 Chromium 的签到执行器：给需要 Cloudflare Turnstile 的站点用
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Shanghai \
+    LANG=C.UTF-8
+
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+        /etc/apt/sources.list 2>/dev/null || true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        chromium \
+        chromium-driver \
+        xvfb \
+        xauth \
+        python3-selenium \
+        python3-cryptography \
+        ca-certificates \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /scripts
+COPY site_browser_sign.py /scripts/site_browser_sign.py
+
+ENTRYPOINT ["python3", "/scripts/site_browser_sign.py"]

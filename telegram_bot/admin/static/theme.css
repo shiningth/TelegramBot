@@ -1,0 +1,1085 @@
+/* ─────────────────────────────────────────────────────────────
+   Console theme — 机房面板
+   灰钢中性色 + 单一琥珀强调色；不使用渐变、发光、彩色阴影。
+   这一层在 styles.css 之后加载，只覆盖外观，不动结构。
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --ink: #1a1e21;
+  --ink-2: #596169;
+  --ink-3: #8b9299;
+  --muted: #596169;
+
+  --paper: #f4f5f6;
+  --surface: #ffffff;
+  --surface-2: #fafbfb;
+  --surface-3: #eef0f1;
+
+  --line: rgba(20, 24, 28, 0.1);
+  --border: rgba(20, 24, 28, 0.1);
+  --hair: rgba(20, 24, 28, 0.1);
+  --hair-strong: rgba(20, 24, 28, 0.18);
+
+  --amber: #b06a12;
+  --amber-ink: #8a4f0a;
+  --amber-soft: rgba(176, 106, 18, 0.1);
+  --amber-line: rgba(176, 106, 18, 0.3);
+
+  --ok: #2e7d55;
+  --warn: #a9640f;
+  --err: #a8323f;
+
+  --r-ctl: 8px;
+  --r-card: 12px;
+  --r-panel: 14px;
+
+  --shadow-1: 0 1px 2px rgba(16, 20, 24, 0.05);
+  --shadow-2: 0 2px 8px rgba(16, 20, 24, 0.07);
+
+  /* 旧变量一并改写，避免残留蓝/绿/紫 */
+  --blue: var(--amber);
+  --purple: var(--amber);
+  --green: var(--ok);
+  --red: var(--err);
+  --yellow: var(--warn);
+  --panel: var(--surface);
+}
+
+/* ── 底色：去掉渐变与网格 ─────────────────────────────── */
+
+body {
+  color: var(--ink);
+  background: var(--paper);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  display: none !important;
+}
+
+/* ── 侧栏 ────────────────────────────────────────────── */
+
+.sidebar {
+  width: 248px;
+  padding: 16px 12px 20px;
+  border-right: 1px solid var(--hair);
+  background: var(--surface-3);
+  backdrop-filter: none;
+}
+
+.brand {
+  gap: 10px;
+  min-height: 40px;
+  margin: 0 4px 20px;
+}
+
+.brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-ctl);
+  background: var(--ink);
+  box-shadow: none;
+}
+
+.brand-mark img {
+  width: 22px;
+  height: 22px;
+  filter: none;
+}
+
+.brand strong {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.brand small {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.side-nav {
+  gap: 2px;
+}
+
+.nav-item,
+.sub-nav-item {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.nav-item:hover,
+.sub-nav-item:hover {
+  background: rgba(20, 24, 28, 0.05);
+  color: var(--ink);
+}
+
+.nav-item.active,
+.sub-nav-item.active {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--hair);
+  box-shadow: var(--shadow-1);
+}
+
+.nav-item.active::before,
+.sub-nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--amber);
+}
+
+.nav-item,
+.sub-nav-item {
+  position: relative;
+}
+
+.nav-parent {
+  margin-bottom: 2px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.nav-ico {
+  width: 18px;
+  height: 18px;
+  color: var(--ink-3);
+}
+
+.nav-item.active .nav-ico,
+.sub-nav-item.active .nav-ico,
+.nav-parent .nav-ico {
+  color: var(--ink-2);
+}
+
+.sub-nav {
+  margin: 2px 0 6px 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--hair);
+}
+
+.sub-nav-item {
+  min-height: 32px;
+  height: 32px;
+  font-size: 12.5px;
+  padding-left: 12px;
+}
+
+.sub-nav-item .nav-ico {
+  width: 16px;
+  height: 16px;
+}
+
+.chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--ink-3);
+  padding: 0;
+}
+
+/* ── 主区域与页头 ─────────────────────────────────────── */
+
+.shell {
+  margin-left: 248px;
+  padding: 0 32px 48px;
+  max-width: none;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  margin: 0 -32px 20px;
+  padding: 18px 32px 14px;
+  border-bottom: 1px solid var(--hair);
+  background: rgba(244, 245, 246, 0.92);
+  backdrop-filter: blur(8px);
+}
+
+.title-row {
+  gap: 10px;
+  align-items: center;
+}
+
+.title-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--ink-3);
+}
+
+h1,
+#pageTitle {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+#pageSubtitle,
+.topbar p {
+  margin-top: 3px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* ── 面板与卡片 ──────────────────────────────────────── */
+
+.panel,
+.module-card,
+.detail-panel,
+.settings-panel,
+.ai-config-panel,
+.site-card,
+.device-panel,
+.hardware-panel,
+.stats-panel,
+.resource-panel,
+.speed-panel,
+.profile-config-panel {
+  border: 1px solid var(--hair);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.panel:hover,
+.module-card:hover {
+  box-shadow: var(--shadow-1);
+  transform: none;
+}
+
+.panel-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hair);
+  gap: 10px;
+}
+
+.panel-head h2,
+.panel-head h3,
+.module-title,
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.panel-head p,
+.panel-sub {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.panel-body,
+.panel > .panel-content {
+  padding: 16px;
+}
+
+.section-split {
+  margin: 24px 0 16px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hair);
+}
+
+/* ── 仪表盘：数值与字段 ───────────────────────────────── */
+
+.dashboard-grid {
+  gap: 16px;
+}
+
+.kv {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 34px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hair);
+}
+
+.kv:last-child {
+  border-bottom: 0;
+}
+
+.kv dt,
+.kv .kv-label,
+.stat-lines dt {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.kv dd,
+.kv .kv-value,
+.stat-lines dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.stat-lines {
+  gap: 0;
+}
+
+.meter {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(20, 24, 28, 0.08);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.meter > span,
+.meter-fill {
+  background: var(--amber);
+  box-shadow: none;
+}
+
+/* 图表：去掉渐变与发光，只留一条走线 */
+.chart-legend {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.range-tabs button,
+.range-tabs .active {
+  box-shadow: none;
+}
+
+/* ── 按钮 ────────────────────────────────────────────── */
+
+button,
+.button {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--r-ctl);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+button:hover,
+.button:hover {
+  background: var(--surface-2);
+  border-color: rgba(20, 24, 28, 0.26);
+  color: var(--ink);
+}
+
+button:active,
+.button:active {
+  transform: translateY(1px);
+}
+
+button.primary,
+.button.primary {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: #9d5c0f;
+  border-color: #9d5c0f;
+}
+
+button.danger,
+button[data-tone="danger"] {
+  border-color: rgba(168, 50, 63, 0.28);
+  background: var(--surface);
+  color: var(--err);
+}
+
+button.danger:hover {
+  background: rgba(168, 50, 63, 0.07);
+}
+
+button:focus-visible,
+.button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.sub-nav-item:focus-visible,
+.nav-item:focus-visible {
+  outline: 2px solid var(--amber-line);
+  outline-offset: 1px;
+}
+
+/* ── 表单控件 ────────────────────────────────────────── */
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+select,
+textarea {
+  min-height: 34px;
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--r-ctl);
+  padding: 7px 10px;
+  background: var(--surface) !important;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  box-shadow: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #a6adb4;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--amber);
+  background: var(--surface) !important;
+  box-shadow: 0 0 0 3px var(--amber-soft);
+  outline: none;
+}
+
+label,
+.field-row label > span,
+.label > span {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.hint,
+.field-row .hint {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--amber);
+}
+
+input[type="number"] {
+  background: var(--surface) !important;
+}
+
+.inline-check,
+.check-row {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.secret-input {
+  height: 34px;
+}
+
+/* ── 标签、状态、胶囊 ─────────────────────────────────── */
+
+.chip,
+.tag,
+.status-pill,
+.badge,
+.selected-group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.chip.accent,
+.tag.accent,
+.status-pill.ok {
+  border-color: var(--amber-line);
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+}
+
+.status-pill {
+  padding-left: 7px;
+}
+
+.status-pill::before,
+.dot,
+.mini-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  box-shadow: none;
+}
+
+.status-pill.ok::before {
+  background: var(--ok);
+}
+
+.status-pill.warn::before,
+.status-pill.pending::before {
+  background: var(--amber);
+}
+
+.status-pill.err::before,
+.status-pill.failed::before {
+  background: var(--err);
+}
+
+.status-pill.ok,
+.status-pill.running {
+  border-color: rgba(46, 125, 85, 0.28);
+  background: rgba(46, 125, 85, 0.08);
+  color: #256546;
+}
+
+/* ── 日志与表格 ──────────────────────────────────────── */
+
+.log-box,
+.file-row,
+.site-log,
+.ltx-sample-row,
+.magnet-preview-row {
+  border: 1px solid var(--hair);
+  border-radius: var(--r-ctl);
+  background: var(--surface-2);
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.log-box {
+  padding: 12px 14px;
+  font-family: "Cascadia Mono", "Consolas", "SF Mono", monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #2a3138;
+}
+
+.site-log-row,
+.file-row {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--hair);
+  background: transparent;
+  border-radius: 0;
+  font-size: 12px;
+}
+
+.site-log-row:hover,
+.file-row:hover {
+  background: var(--surface-2);
+}
+
+.site-log-head,
+.file-row.head {
+  color: var(--ink-3);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.ltx-sample-row {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--hair);
+  border-radius: 0;
+  background: transparent;
+}
+
+.site-log-row time,
+.ltx-sample-time,
+.ltx-sample-code {
+  font-family: "Cascadia Mono", "Consolas", "SF Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.site-result,
+.site-last {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.site-result.ok {
+  color: var(--ok);
+}
+
+.site-result.bad {
+  color: var(--err);
+}
+
+/* ── 模块卡片 ────────────────────────────────────────── */
+
+.module-grid {
+  gap: 12px;
+}
+
+.module-card-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.module-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--ink-3);
+}
+
+.module-card .module-actions {
+  padding: 12px 16px;
+}
+
+/* ── 弹层、菜单、提示 ─────────────────────────────────── */
+
+.service-menu-panel,
+.toast {
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.toast span {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* ── 滚动条 ──────────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 24, 28, 0.22) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+  background-color: rgba(20, 24, 28, 0.22);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(20, 24, 28, 0.36);
+}
+
+/* ── 顺手清理：残留的渐变、发光、彩色阴影 ───────────────── */
+
+[class*="gradient"],
+.chart-fill,
+.chart-glow,
+.brand-mark::after,
+.panel::after {
+  background-image: none !important;
+}
+
+/* 数字统一等宽，便于扫读 */
+.kv dd,
+.meter + span,
+.stat-lines dd,
+.site-log-row,
+.ltx-sample-row,
+.chart-legend,
+.range-tabs {
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* Chart proportions: keep the data band readable, not a wall of empty grid. */
+canvas#resourceChart {
+  height: 176px !important;
+}
+
+canvas#speedChart {
+  height: 156px !important;
+}
+
+.panel-head h2 > span {
+  display: none;
+}
+
+.resource-panel,
+.speed-panel {
+  padding-bottom: 14px;
+}
+
+.range-tabs {
+  margin-top: 12px;
+}
+
+/* Brand mark stays monochrome so amber is the only accent in the shell. */
+.brand-mark img {
+  filter: grayscale(1) contrast(1.05);
+  opacity: 0.9;
+}
+
+
+/* ---- Chips, tags, cron helpers: neutral surfaces, amber only when selected ---- */
+.tag,
+.chip,
+.badge {
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 9px;
+}
+
+.tag::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  vertical-align: 1px;
+}
+
+.chip {
+  height: 28px;
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.chip:hover {
+  border-color: var(--hair-strong);
+  color: var(--ink);
+}
+
+.chip.active,
+.chip[aria-pressed="true"] {
+  background: var(--amber-soft);
+  border-color: rgba(176, 106, 18, 0.34);
+  color: var(--amber-ink);
+}
+
+.cron-summary,
+.cron-summary.valid,
+.cron-summary.invalid {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cron-summary.invalid {
+  color: var(--err);
+}
+
+.cron-help {
+  color: var(--ink-3);
+  font-size: 12px;
+  gap: 8px;
+}
+
+.template-card textarea,
+.template-card textarea[name="message"] {
+  min-height: 64px;
+}
+
+
+/* Override legacy coloured pills (styles.css sets tinted backgrounds). */
+.status-pill,
+.status-pill.running,
+.status-pill.ok,
+.status-pill.starting,
+.status-pill.warning,
+.status-pill.error,
+.status-pill.failed {
+  background: var(--surface-2) !important;
+  border-color: var(--hair) !important;
+  color: var(--ink-2) !important;
+  border-radius: 999px !important;
+}
+
+.status-pill.running::before,
+.status-pill.ok::before {
+  background: var(--ok) !important;
+}
+
+.status-pill.error::before,
+.status-pill.failed::before {
+  background: var(--err) !important;
+}
+
+
+/* Cron summary was a tinted box; keep it as quiet inline text. */
+.cron-summary,
+.cron-summary.valid,
+.cron-summary.invalid {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.cron-help button,
+.cron-help .chip {
+  color: var(--ink-2) !important;
+}
+
+.cron-help button:hover {
+  color: var(--ink) !important;
+}
+
+
+/* Tags: neutral chrome, colour lives in the dot only. */
+.tag,
+.tag.enabled,
+.tag.disabled,
+.tag.warn,
+.tag.ok,
+.tag.info {
+  background: var(--surface) !important;
+  border: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+  font-weight: 500 !important;
+}
+
+.tag.enabled::before {
+  background: var(--ok) !important;
+}
+
+.tag.disabled::before {
+  background: var(--err) !important;
+}
+
+.tag.warn::before {
+  background: var(--warn) !important;
+}
+
+/* Guide / info blocks were tinted blue; use a quiet inset surface. */
+.ltx-guide {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: 10px !important;
+  color: var(--ink-2) !important;
+}
+
+.ltx-guide code {
+  background: rgba(20, 24, 28, 0.06) !important;
+  border-radius: 4px !important;
+}
+
+/* Section dividers carry weight, not space. */
+.section-split {
+  margin: 6px 0 14px !important;
+}
+
+
+/* Collapsible helpers read as a quiet disclosure row. */
+.ltx-guide summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ltx-guide summary::-webkit-details-marker {
+  display: none;
+}
+
+.ltx-guide summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--ink-3);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+
+.ltx-guide[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.ltx-guide[open] summary {
+  margin-bottom: 8px;
+}
+
+
+/* Inline checkbox rows must never squeeze their label. */
+.check-row,
+.inline-setting.check-row {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.check-row > span,
+.inline-setting.check-row > span {
+  white-space: nowrap;
+  flex: 0 1 auto;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.check-row input[type="checkbox"],
+.inline-setting.check-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px !important;
+  min-width: 16px !important;
+  height: 16px !important;
+  min-height: 16px !important;
+  margin: 0 0 0 auto;
+  accent-color: var(--amber);
+}
+
+
+/* Checkbox sits before its label, flush to the column start. */
+.check-row input[type="checkbox"],
+.inline-setting.check-row input[type="checkbox"] {
+  order: -1;
+  margin: 0 !important;
+}
+
+
+/* Panel titles never wrap mid-word. */
+.panel-head h2 {
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+
+.panel-head .hint {
+  margin-top: 4px;
+}
+
+/* Log stream: give the text room to breathe. */
+.log-viewer,
+.log-output,
+pre.log {
+  padding: 12px 14px !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--hair) !important;
+  background: var(--surface-2) !important;
+  font-size: 11.5px !important;
+  line-height: 1.62 !important;
+  color: var(--ink-2) !important;
+}
+
+.log-actions {
+  gap: 10px !important;
+}
+
+.log-actions .hint {
+  color: var(--ink-3) !important;
+}
+
+
+/* Final neutralisation pass for legacy coloured badges/chips. */
+.badge,
+.selected-group-chip,
+.tag,
+.tag.enabled,
+.tag.disabled,
+.tag.warn,
+.tag.ok,
+.tag.info {
+  background: var(--surface) !important;
+  border: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+}
+
+.chip {
+  background: var(--surface) !important;
+  border: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+}
+
+.chip.active,
+.chip[aria-pressed="true"] {
+  background: var(--amber-soft) !important;
+  border-color: rgba(176, 106, 18, 0.34) !important;
+  color: var(--amber-ink) !important;
+}
+
+
+/* All setting forms use the same label-above-field rhythm. */
+.setting-form label:not(.inline-setting):not(.check-row) {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 6px !important;
+}
+
+.setting-form label:not(.inline-setting):not(.check-row) > span {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.ai-setting-form {
+  gap: 16px 18px !important;
+  align-items: start;
+}
+
+.setting-form textarea {
+  min-height: 72px;
+  line-height: 1.55;
+}
+
+
+/* Rail shares the page background so the column has no seam on scroll. */
+.sidebar {
+  background: var(--paper) !important;
+  border-right: 1px solid var(--hair) !important;
+}
+
+.topbar {
+  background: rgba(244, 245, 246, 0.92) !important;
+}

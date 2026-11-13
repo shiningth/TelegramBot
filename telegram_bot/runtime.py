@@ -59,7 +59,7 @@ def system_snapshot(project_root: Path, app_uptime_seconds: int) -> dict[str, An
     return {
         "device": {
             "hostname": socket.gethostname(),
-            "system_platform": platform.node() or platform.system().lower(),
+            "system_platform": platform.release() or platform.system().lower(),
             "uptime_seconds": app_uptime_seconds,
             "os": platform.system().lower(),
             "architecture": platform.machine(),

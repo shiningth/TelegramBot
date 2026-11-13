@@ -386,7 +386,18 @@ def _login_page(next_url: str) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TelegramBot 登录</title>
     <style>
-      :root {{ color-scheme: light; --ink: #172126; --muted: #68767d; --line: rgba(36, 48, 54, 0.14); --green: #14a86b; }}
+      :root {{
+        color-scheme: light;
+        --ink: #1a1e21;
+        --ink-2: #596169;
+        --ink-3: #8b9299;
+        --paper: #f4f5f6;
+        --surface: #ffffff;
+        --hair: rgba(20, 24, 28, 0.10);
+        --hair-strong: rgba(20, 24, 28, 0.18);
+        --amber: #b06a12;
+        --err: #a8323f;
+      }}
       * {{ box-sizing: border-box; }}
       body {{
         margin: 0;
@@ -395,52 +406,77 @@ def _login_page(next_url: str) -> str:
         place-items: center;
         color: var(--ink);
         font-family: "Aptos", "Segoe UI", "Microsoft YaHei", sans-serif;
-        background:
-          linear-gradient(rgba(244, 248, 248, 0.78), rgba(244, 248, 248, 0.82)),
-          radial-gradient(circle at 26% 12%, rgba(98, 151, 225, 0.28), transparent 28%),
-          radial-gradient(circle at 74% 18%, rgba(230, 142, 115, 0.22), transparent 30%),
-          linear-gradient(135deg, #dce8ec 0%, #f3ece4 48%, #d9e8e2 100%);
+        background: var(--paper);
       }}
       .login-panel {{
-        width: min(420px, calc(100vw - 32px));
-        padding: 28px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.82);
-        box-shadow: 0 22px 60px rgba(42, 52, 58, 0.16);
-        backdrop-filter: blur(18px);
+        width: min(392px, calc(100vw - 32px));
+        padding: 32px 32px 28px;
+        border: 1px solid var(--hair);
+        border-radius: 14px;
+        background: var(--surface);
+        box-shadow: 0 1px 2px rgba(20, 24, 28, 0.04), 0 12px 32px rgba(20, 24, 28, 0.06);
       }}
-      h1 {{ margin: 0 0 8px; font-size: 28px; }}
-      p {{ margin: 0 0 22px; color: var(--muted); line-height: 1.6; }}
+      .login-brand {{
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 22px;
+        color: var(--ink-2);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }}
+      .login-brand::before {{
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--amber);
+      }}
+      h1 {{ margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }}
+      p {{ margin: 0 0 24px; color: var(--ink-3); font-size: 12.5px; line-height: 1.6; }}
       form {{ display: grid; gap: 14px; }}
-      label {{ display: grid; gap: 7px; color: var(--muted); font-weight: 800; }}
+      label {{ display: grid; gap: 6px; color: var(--ink-2); font-size: 12px; font-weight: 500; }}
       input {{
         width: 100%;
-        min-height: 42px;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 9px 11px;
+        min-height: 38px;
+        border: 1px solid var(--hair-strong);
+        border-radius: 8px;
+        padding: 8px 11px;
         color: var(--ink);
-        background: rgba(255, 255, 255, 0.9);
+        background: var(--surface);
         font: inherit;
+        font-size: 13.5px;
+        transition: border-color 120ms ease, box-shadow 120ms ease;
+      }}
+      input:focus {{
+        outline: none;
+        border-color: var(--amber);
+        box-shadow: 0 0 0 3px rgba(176, 106, 18, 0.10);
       }}
       button {{
-        min-height: 42px;
-        border: 1px solid #087a50;
-        border-radius: 7px;
+        min-height: 38px;
+        margin-top: 4px;
+        border: 1px solid var(--amber);
+        border-radius: 8px;
         color: #fff;
-        background: var(--green);
+        background: var(--amber);
         cursor: pointer;
         font: inherit;
-        font-weight: 900;
+        font-size: 13.5px;
+        font-weight: 500;
+        transition: background 120ms ease;
       }}
-      .error {{ min-height: 20px; margin-top: 2px; color: #c43e52; font-weight: 800; }}
+      button:hover {{ background: #9d5c0f; }}
+      button:disabled {{ opacity: 0.6; cursor: default; }}
+      .error {{ min-height: 18px; margin-top: 2px; color: var(--err); font-size: 12.5px; }}
     </style>
   </head>
   <body>
     <main class="login-panel">
-      <h1>TelegramBot 登录</h1>
-      <p>登录状态保存在当前服务进程内；服务重启后需要重新登录。</p>
+      <div class="login-brand">TelegramBot</div>
+      <h1>登录控制台</h1>
+      <p>登录状态保存在当前服务进程内，服务重启后需要重新登录。</p>
       <form id="loginForm">
         <label>用户名<input name="username" autocomplete="username" required autofocus /></label>
         <label>密码<input name="password" type="password" autocomplete="current-password" required /></label>

@@ -7,12 +7,13 @@
     <meta name="application-name" content="TelegramBot" />
     <meta name="apple-mobile-web-app-title" content="TelegramBot" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#008ee8" />
+    <meta name="theme-color" content="#1a1e21" />
     <link rel="icon" href="/assets/telegrambot-logo.svg" type="image/svg+xml" />
     <link rel="icon" href="/assets/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/theme.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -88,14 +89,14 @@
         <div class="dashboard-grid">
           <section class="panel device-panel">
             <div class="panel-head">
-              <h2><span>▦</span>设备信息</h2>
+              <h2>设备信息</h2>
             </div>
             <dl id="deviceInfo" class="kv lines"></dl>
           </section>
 
           <section class="panel hardware-panel">
             <div class="panel-head">
-              <h2><span>▣</span>硬件信息</h2>
+              <h2>硬件信息</h2>
             </div>
             <dl id="hardwareInfo" class="kv lines"></dl>
             <div class="meter"><span id="diskMeter"></span></div>
@@ -103,7 +104,7 @@
 
           <section class="panel resource-panel">
             <div class="panel-head">
-              <h2><span>⌁</span>资源使用趋势</h2>
+              <h2>资源使用趋势</h2>
               <div class="chart-legend">
                 <span>CPU <b id="cpuLegend">0%</b></span>
                 <span>内存 <b id="memoryLegend">0%</b></span>
@@ -121,7 +122,7 @@
 
           <section class="panel speed-panel">
             <div class="panel-head">
-              <h2><span>⌁</span>实时速率</h2>
+              <h2>实时速率</h2>
               <div class="chart-legend">
                 <span>下载 <b id="downloadLegend">0 B/s</b></span>
                 <span>上传 <b id="uploadLegend">0 B/s</b></span>
@@ -132,7 +133,7 @@
 
           <section class="panel stats-panel">
             <div class="panel-head">
-              <h2><span>▥</span>统计信息</h2>
+              <h2>统计信息</h2>
             </div>
             <dl id="statsInfo" class="kv stat-lines"></dl>
           </section>
@@ -507,10 +508,10 @@
           <p id="ltxWatchLast" class="hint">尚未运行</p>
           <div class="magnet-form-lead">
             <p class="hint">用独立用户会话（默认 <code>ltx_user</code>）读取频道，解析每条消息的 ed2k、番号、大小，按「番号 + ed2k」与 momo 比对后写入 <code>外部资源 / LTX破解</code>。</p>
-            <p class="hint">先勾着「试运行」跑一轮，确认解析无误再取消勾选开始真正入库。抓元数据按固定顺序依次尝试：DMM 封面（约 1 秒）→ AVbase → AVWikiDB → Jav321 → MGStage → JavDB，直连能拿到的源先跑（DMM、Jav321），封面和演员都拿到就停，还缺才去等 Cloudflare。JavDB 现在部分页面要登录才给看，默认不启用（需要时把 <code>javdb</code> 写进配置的 <code>metadata_sources</code>）。历史数据不批量回补，新入库的条目照常带封面与演员；都拿不到就先入库并记一笔「缺封面」，可事后用 <code>scripts/repair_missing_covers.py</code> 补。</p>
+            <p class="hint">先勾「试运行」验证解析，再取消勾选开始入库。元数据按 DMM → AVbase → AVWikiDB → Jav321 → MGStage 的顺序取，封面和演员都拿到就停；JavDB 默认关闭（部分页面要登录）。缺封面会入库并记账，事后可跑 <code>scripts/repair_missing_covers.py</code> 补。</p>
           </div>
-          <div class="ltx-guide">
-            <strong>如何获取采集会话 <code>ltx_user.session</code>（只需一次）</strong>
+          <details class="ltx-guide">
+            <summary>如何获取采集会话 <code>ltx_user.session</code>（只需一次）</summary>
             <ol>
               <li>打开 Portainer → 容器 <code>tgbot</code> → Console，或在 NAS 上 SSH 执行下面的命令</li>
               <li><code>docker exec -it tgbot python /app/scripts/telegram_user_login.py</code></li>
@@ -518,12 +519,13 @@
               <li>验证码会出现在 Telegram 里与「Telegram」官方账号的对话中，直接输入到终端</li>
               <li>看到「登录成功」即生成 <code>/app/sessions/ltx_user.session</code>（宿主机 <code>…/telegrambot/sessions/</code>），重建容器不会丢</li>
             </ol>
-            <p class="hint">缺少这个会话时，日志会提示「LTX 采集会话不存在」，上方「会话」标签也会显示缺失。</p>
-          </div>
+            <p class="hint">缺少这个会话时，日志会提示「LTX 采集会话不存在」，「会话」标签也会显示缺失。</p>
+          </details>
           <form id="ltxWatchSettingsForm" class="setting-form ai-setting-form magnet-form">
             <div class="field-row cols-2">
-              <label class="inline-setting check-row"><span>试运行（只解析、不写 momo）</span><input name="dry_run" type="checkbox"></label>
+              <label class="inline-setting check-row"><span>试运行</span><input name="dry_run" type="checkbox"></label>
               <label class="inline-setting check-row"><span>抓取封面与演员</span><input name="fetch_metadata" type="checkbox"></label>
+              <p class="hint wide-field">试运行只解析不写 momo；元数据开关控制是否抓封面与演员。</p>
             </div>
             <div class="field-row cols-2">
               <label class="stacked"><span>监控频道</span><input name="channel" type="text" placeholder="用户名或数字 ID（-100…），不带 @"></label>

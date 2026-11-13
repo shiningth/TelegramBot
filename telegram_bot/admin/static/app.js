@@ -437,21 +437,21 @@ function renderDevice(data) {
   const list = document.getElementById("deviceInfo");
   list.innerHTML = "";
   addKv(list, "主机名", device.hostname);
-  addKv(list, "系统平台", device.system_platform);
-  addKv(list, "运行时间", formatDuration(device.uptime_seconds));
   addKv(list, "操作系统", device.os);
+  addKv(list, "内核版本", device.system_platform);
   addKv(list, "架构", device.architecture);
+  addKv(list, "运行时间", formatDuration(device.uptime_seconds));
 }
 
 function renderHardware(data) {
   const hardware = data.system.hardware;
   const list = document.getElementById("hardwareInfo");
   list.innerHTML = "";
-  addKv(list, "硬件信息", hardware.processor);
+  addKv(list, "处理器", hardware.processor);
   addKv(list, "核心数", `${hardware.cores} 核心`);
   addKv(list, "内存", formatBytes(hardware.memory_total_bytes));
-  addKv(list, "硬盘容量", formatBytes(hardware.disk_total_bytes));
-  addKv(list, "硬盘容量", `${hardware.disk_percent}%`);
+  addKv(list, "磁盘容量", formatBytes(hardware.disk_total_bytes));
+  addKv(list, "磁盘占用", `${hardware.disk_percent}%`);
   document.getElementById("diskMeter").style.width = `${Math.min(hardware.disk_percent, 100)}%`;
 }
 
@@ -2899,13 +2899,18 @@ function drawCharts() {
     ...history.flatMap((item) => [item.downloadRate || 0, item.uploadRate || 0]),
     1024,
   );
+  const busyMax = Math.max(
+    ...history.flatMap((item) => [item.cpu || 0, item.memory || 0]),
+    0,
+  );
+  const resourceMax = Math.max(1, Math.ceil(busyMax * 2));
   drawLineChart(document.getElementById("resourceChart"), [
-    { values: history.map((item) => item.cpu), color: "#008ee8", fill: "rgba(0, 142, 232, 0.13)" },
-    { values: history.map((item) => item.memory), color: "#9b38ff", fill: "rgba(155, 56, 255, 0.12)" },
-  ], 100);
+    { values: history.map((item) => item.cpu), color: "#b06a12", fill: "rgba(176, 106, 18, 0.10)" },
+    { values: history.map((item) => item.memory), color: "#5c646b", fill: "rgba(20, 24, 28, 0.05)" },
+  ], resourceMax);
   drawLineChart(document.getElementById("speedChart"), [
-    { values: history.map((item) => item.downloadRate || 0), color: "#008ee8", fill: "rgba(0, 142, 232, 0.11)" },
-    { values: history.map((item) => item.uploadRate || 0), color: "#17b56b", fill: "rgba(23, 181, 107, 0.13)" },
+    { values: history.map((item) => item.downloadRate || 0), color: "#b06a12", fill: "rgba(176, 106, 18, 0.10)" },
+    { values: history.map((item) => item.uploadRate || 0), color: "#5c646b", fill: "rgba(20, 24, 28, 0.05)" },
   ], speedMax);
 }
 
@@ -2919,7 +2924,7 @@ function drawLineChart(canvas, series, maxValue) {
   const ctx = canvas.getContext("2d");
   ctx.scale(ratio, ratio);
   ctx.clearRect(0, 0, width, height);
-  ctx.strokeStyle = "rgba(20, 32, 28, 0.08)";
+  ctx.strokeStyle = "rgba(20, 24, 28, 0.07)";
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i += 1) {
     const y = (height / 5) * i;
@@ -2940,7 +2945,7 @@ function drawLineChart(canvas, series, maxValue) {
       else ctx.lineTo(x, y);
     });
     ctx.strokeStyle = line.color;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 1.75;
     ctx.stroke();
     ctx.lineTo(width, height);
     ctx.lineTo(0, height);

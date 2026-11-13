@@ -3080,3 +3080,128 @@ loadMetricHistory();
 refreshAll();
 setInterval(refreshStatus, 5000);
 scheduleLogRefreshLoop();
+
+/* ── 未保存修改条 ─────────────────────────────────────────────────────
+   任何一个设置面板被改动，就在右下角浮出「未保存 · <面板名>」，
+   保存按钮直接触发该面板自己的保存逻辑，还原按钮把控件退回载入时的值。 */
+(function () {
+  const bar = document.getElementById("dirtyBar");
+  if (!bar) return;
+  const labelEl = document.getElementById("dirtyBarLabel");
+  const saveBtn = document.getElementById("dirtyBarSave");
+  const revertBtn = document.getElementById("dirtyBarRevert");
+  let state = null;
+
+  function panelOf(el) {
+    return el.closest(".panel") || el.closest("section.view > section") || el.closest("form");
+  }
+
+  function saveButtonFor(panel) {
+    if (!panel) return null;
+    const btns = panel.querySelectorAll("button.primary");
+    for (const btn of btns) {
+      if (/^save/i.test(btn.id || "")) return btn;
+    }
+    return null;
+  }
+
+  function panelTitle(panel) {
+    const h2 = panel && panel.querySelector("h2");
+    const text = h2 ? h2.textContent.trim() : "";
+    return text || "当前设置";
+  }
+
+  function snapshotValue(el) {
+    if (el.type === "checkbox" || el.type === "radio") return el.checked;
+    return el.value;
+  }
+
+  function restoreValue(el, value) {
+    if (el.type === "checkbox" || el.type === "radio") el.checked = Boolean(value);
+    else el.value = value;
+  }
+
+  function hide() {
+    bar.hidden = true;
+    state = null;
+  }
+
+  function onEdit(event) {
+    const el = event.target;
+    if (!el || !el.matches || !el.matches("input, select, textarea")) return;
+    if (el.type === "range") return;
+    const panel = panelOf(el);
+    const save = saveButtonFor(panel);
+    if (!panel || !save) return;
+    if (!state || state.panel !== panel) {
+      state = { panel, save, values: new Map(), title: panelTitle(panel) };
+      rememberPanel(panel);
+    }
+    if (!state.values.has(el)) state.values.set(el, snapshotValue(el));
+    labelEl.textContent = state.title;
+    bar.hidden = false;
+  }
+
+  // 基线在「进入这一组控件」时就记下来，输入之后才记会记成改后的值
+  function rememberPanel(panel) {
+    panel
+      .querySelectorAll("input, select, textarea")
+      .forEach((el) => {
+        if (el.type === "range" || el.type === "file") return;
+        state.values.set(el, snapshotValue(el));
+      });
+  }
+
+  function onFocusIn(event) {
+    const el = event.target;
+    if (!el || !el.matches || !el.matches("input, select, textarea")) return;
+    const panel = panelOf(el);
+    const save = saveButtonFor(panel);
+    if (!panel || !save) return;
+    if (!state || state.panel !== panel) {
+      state = { panel, save, values: new Map(), title: panelTitle(panel) };
+      rememberPanel(panel);
+    }
+  }
+
+  document.addEventListener("focusin", onFocusIn, true);
+
+  document.addEventListener("input", onEdit, true);
+  document.addEventListener("change", onEdit, true);
+
+  // 面板自己的保存按钮被点中，就认为这次修改已经落地
+  document.addEventListener(
+    "click",
+    (event) => {
+      const el = event.target;
+      if (!el || !el.closest) return;
+      const btn = el.closest("button");
+      if (btn && /^save/i.test(btn.id || "")) hide();
+    },
+    true
+  );
+
+  saveBtn.addEventListener("click", async () => {
+    if (!state) return hide();
+    const target = state.save;
+    target.click();
+    // 保存是异步的：等它的提示落地再收起，失败时保留提示条
+    const before = target.textContent;
+    setTimeout(() => {
+      if (target.textContent === before) hide();
+    }, 1600);
+  });
+
+  revertBtn.addEventListener("click", () => {
+    if (!state) return hide();
+    state.values.forEach((value, el) => restoreValue(el, value));
+    hide();
+  });
+
+  // 切换视图时不留残留状态
+  document.querySelectorAll(".nav-item, .sub-nav-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      if (state) setTimeout(hide, 30);
+    });
+  });
+})();

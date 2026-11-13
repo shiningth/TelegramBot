@@ -1083,3 +1083,281 @@ pre.log {
 .topbar {
   background: rgba(244, 245, 246, 0.92) !important;
 }
+
+
+/* ════════════════════════════════════════════════════════════════════
+   2026-11-13 · 表单系统 + AA 可读性
+   一个标签节奏（标签在上）· 两档高度（34 / 28）· 栅格列宽 · 单一焦点环
+   ════════════════════════════════════════════════════════════════════ */
+:root {
+  --ink-3: #63696f;          /* 原 #8b9299 对纸底仅 2.88:1 */
+  --ctl-h: 34px;
+  --ctl-h-sm: 28px;
+  --ctl-gap: 14px;
+  --ctl-gap-x: 18px;
+  --label-gap: 6px;
+}
+
+/* — 一行标签节奏：标签在上、输入撑满 — */
+.setting-form,
+.service-form {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: var(--ctl-gap) var(--ctl-gap-x) !important;
+}
+
+.setting-form > label,
+.service-form > label,
+.field-row > label {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: var(--label-gap) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  line-height: 1.35 !important;
+  color: var(--ink-2) !important;
+}
+
+.setting-form > label > span:first-child,
+.service-form > label > span:first-child,
+.field-row > label > span:first-child {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--ink-2) !important;
+}
+
+/* 复选框行保持左框右字 */
+.setting-form label.check-row,
+.field-row label.check-row,
+label.inline-setting {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  color: var(--ink) !important;
+  min-height: var(--ctl-h) !important;
+}
+
+/* — 栅格 — */
+.field-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: var(--ctl-gap) var(--ctl-gap-x) !important;
+}
+.field-row.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.field-row.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+.field-row.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+@media (max-width: 1180px) {
+  .field-row.cols-3,
+  .field-row.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+.wide-field { grid-column: 1 / -1 !important; }
+
+/* — 控件只有一种尺寸语言 — */
+.setting-form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+.service-form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+.field-row input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+.setting-form select,
+.service-form select,
+.field-row select,
+.setting-form textarea,
+.service-form textarea,
+.field-row textarea {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  height: var(--ctl-h) !important;
+  min-height: var(--ctl-h) !important;
+  padding: 0 10px !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  border-radius: var(--r-ctl) !important;
+}
+.setting-form textarea,
+.service-form textarea,
+.field-row textarea {
+  height: auto !important;
+  min-height: 44px !important;
+  padding: 8px 10px !important;
+  resize: vertical !important;
+}
+.wide-field textarea,
+textarea.wide-field { min-height: 72px !important; }
+
+/* 句内嵌的单位输入（保留 N 天 / 间隔 N 秒）也统一身板 */
+label > input[type="number"].inline-number,
+.inline-number {
+  width: 64px !important;
+  height: var(--ctl-h-sm) !important;
+  min-height: var(--ctl-h-sm) !important;
+  text-align: center !important;
+  padding: 0 6px !important;
+}
+
+/* — 可读性：placeholder / 图例 / 副标题 — */
+input::placeholder,
+textarea::placeholder {
+  color: #767d84 !important;
+  opacity: 1 !important;
+}
+b#cpuLegend,
+b#memoryLegend,
+b#downloadLegend,
+b#uploadLegend,
+.chart-legend b {
+  color: var(--amber-ink) !important;
+}
+#pageSubtitle,
+small,
+.subtitle {
+  font-size: 12px !important;
+  color: var(--ink-3) !important;
+}
+
+/* — 焦点：可见的实心环，仍然只用在键盘/聚焦时 — */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+.chip:focus-visible {
+  outline: 2px solid var(--amber) !important;
+  outline-offset: 1px !important;
+}
+
+/* — 触控目标：时间 chip 抬到 32px — */
+.chip,
+button.chip {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 12px !important;
+  border-radius: var(--r-ctl) !important;
+  font-size: 12.5px !important;
+}
+
+/* — 保存：粘性未保存条 — */
+.dirty-bar {
+  position: fixed;
+  right: 28px;
+  bottom: 24px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px 9px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(20, 24, 28, 0.16);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.dirty-bar[hidden] { display: none !important; }
+.dirty-bar .dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex: none;
+}
+.dirty-bar strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.dirty-bar button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+/* — 动态卡片（签到任务 / 站点）也走同一套身板 — */
+.template-fields,
+.site-fields {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 12px 16px !important;
+  align-items: start !important;
+}
+@media (max-width: 1180px) {
+  .template-fields,
+  .site-fields { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+.template-fields > *,
+.site-fields > * { min-width: 0 !important; }
+
+.template-fields > label,
+.site-fields > label {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: var(--label-gap) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--ink-2) !important;
+}
+
+.template-fields .wide-field,
+.site-fields .wide-field { grid-column: 1 / -1 !important; }
+
+.template-fields input:not([type="checkbox"]):not([type="radio"]),
+.site-fields input:not([type="checkbox"]):not([type="radio"]),
+.template-fields select,
+.site-fields select,
+.template-fields textarea,
+.site-fields textarea {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  height: var(--ctl-h) !important;
+  min-height: var(--ctl-h) !important;
+  padding: 0 10px !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  border-radius: var(--r-ctl) !important;
+}
+.template-fields textarea,
+.site-fields textarea {
+  height: auto !important;
+  min-height: 44px !important;
+  padding: 8px 10px !important;
+}
+.template-fields .cron-field textarea,
+.site-fields .cron-field textarea {
+  height: var(--ctl-h) !important;
+  min-height: var(--ctl-h) !important;
+  padding: 7px 10px !important;
+}
+
+/* 密码/token 框与普通输入框同宽（原来被外层挤到 371px） */
+.secret-input,
+input.secret-input {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.secret-field,
+.secret-wrap { display: flex !important; align-items: center; gap: 8px; width: 100% !important; }
+
+/* 「label.stacked.secret-field > span.secret-input > input + 眼睛按钮」这一支单独摆平 */
+label.secret-field,
+.stacked.secret-field {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+.secret-field > .secret-input {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+.secret-field > .secret-input > input {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}

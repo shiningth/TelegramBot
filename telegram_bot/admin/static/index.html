@@ -884,6 +884,13 @@
       </section>
     </main>
 
+    <div id="dirtyBar" class="dirty-bar" hidden role="status" aria-live="polite">
+      <span class="dirty-dot" aria-hidden="true"></span>
+      <span>未保存 · <strong id="dirtyBarLabel">当前设置</strong></span>
+      <button id="dirtyBarRevert" type="button">还原</button>
+      <button id="dirtyBarSave" class="primary" type="button">保存</button>
+    </div>
+
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
     <script src="/app.js"></script>
   </body>

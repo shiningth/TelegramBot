@@ -1,18 +1,27 @@
 name: build-and-publish
 
-# 手动触发时填版本号；打 v* 标签时自动取标签名当版本号
+# 三种触发：
+#   1) push 到 main —— 自动构建并发布 :latest（日常用这个，不用再手动说）
+#   2) 打 v* 标签   —— 用标签名当版本号，额外发一个带版本号的 tag
+#   3) 手动触发     —— 填版本号，额外发一个带版本号的 tag
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '镜像版本号，例如 2026.11.12.6'
-        required: true
+        description: '镜像版本号（可留空，留空则只发 :latest）'
+        required: false
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
 env:
   IMAGE: shiningth/tgbot
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -23,13 +32,20 @@ jobs:
       - name: Resolve version
         id: meta
         run: |
+          RELEASE="false"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
-          else
+            [ -n "$VERSION" ] && RELEASE="true"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            RELEASE="true"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="ci-$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "resolved version: $VERSION"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "resolved version: $VERSION (release tag: $RELEASE)"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -58,12 +74,18 @@ jobs:
       - name: Smoke check
         run: docker run --rm --network none --entrypoint python "$IMAGE:${{ steps.meta.outputs.version }}" -m compileall -q /app/telegram_bot
 
+      # 日常 push 只更新 :latest；打 tag / 手动填版本号时才额外推版本 tag
       - name: Push
         run: |
-          docker push "$IMAGE:${{ steps.meta.outputs.version }}"
+          if [ "${{ steps.meta.outputs.release }}" = "true" ]; then
+            docker push "$IMAGE:${{ steps.meta.outputs.version }}"
+          fi
           docker push "$IMAGE:latest"
 
       - name: Summary
         run: |
-          echo "已发布 $IMAGE:${{ steps.meta.outputs.version }} 与 :latest" >> "$GITHUB_STEP_SUMMARY"
-          docker image inspect "$IMAGE:${{ steps.meta.outputs.version }}" --format '{{index .RepoDigests 0}}' >> "$GITHUB_STEP_SUMMARY"
+          echo "已发布 $IMAGE:latest" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.meta.outputs.release }}" = "true" ]; then
+            echo "同时发布 $IMAGE:${{ steps.meta.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          docker image inspect "$IMAGE:latest" --format '{{index .RepoDigests 0}}' >> "$GITHUB_STEP_SUMMARY"

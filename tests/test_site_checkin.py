@@ -172,7 +172,7 @@ def test_same_day_same_count_with_today_marker_is_already(tmp_path):
 def test_json_state_maps_ajax_replies():
     assert _json_state('{"ret":-1,"msg":"已经签到"}') == ("already", "已经签到")
     assert _json_state('{"ret":0,"msg":"签到成功"}')[0] == "signed"
-    assert _json_state('{"ret":-2,"msg":"补签卡不足"}')[0] == "failed"
+    assert _json_state('{"ret":-2,"msg":"补签卡不足"}')[0] == "pending"
     assert _json_state("<html>签到成功</html>") is None
 
 
@@ -245,11 +245,12 @@ def test_browser_method_reports_captcha_when_trawl_solves_nothing(monkeypatch):
     assert "Turnstile 未通过" in result.detail
 
 
-def test_browser_method_without_trawl_endpoint_is_reported(monkeypatch):
+def test_browser_method_timeout_lands_in_pending(monkeypatch):
+    """TRAWL 整趟超时不能判失败：签到请求可能已经在浏览器里发出去了。"""
     from telegram_bot.shared import sitecheckin as sitecheckin_module
 
     def fake_post(url, json=None, timeout=None, **kwargs):
-        return _FakeResponse({})
+        raise sitecheckin_module.httpx.TimeoutException("read timeout")
 
     monkeypatch.setattr(sitecheckin_module.httpx, "post", fake_post)
 
@@ -260,7 +261,36 @@ def test_browser_method_without_trawl_endpoint_is_reported(monkeypatch):
         flaresolverr="http://192.168.50.105:8193",
     )
 
-    assert result.state == "failed"
-    assert "TRAWL" in result.detail
+    assert result.state == "pending"
+    assert "超时" in result.detail
+
+
+def test_browser_method_verifies_after_timeout(monkeypatch):
+    """第一趟超时、复核那趟看到已签到 → 直接算成功。"""
+    from telegram_bot.shared import sitecheckin as sitecheckin_module
+
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        calls.append(json)
+        if len(calls) <= 2:
+            raise sitecheckin_module.httpx.TimeoutException("read timeout")
+        return _FakeResponse({"html": "<html>已经签到过了，请勿重复刷新</html>", "statusCode": 200})
+
+    monkeypatch.setattr(sitecheckin_module.httpx, "post", fake_post)
+
+    result = sign_site(
+        url="https://ourbits.club/attendance.php",
+        cookie="ourbits_jwt=abc",
+        method="browser",
+        flaresolverr="http://192.168.50.105:8193",
+    )
+
+    assert result.state == "already"
+    assert "复核" in result.detail
+
+
+def test_json_state_treats_retroactive_card_shortage_as_pending():
+    assert _json_state('{"ret":-5,"msg":"补签卡不足"}')[0] == "pending"
 
 

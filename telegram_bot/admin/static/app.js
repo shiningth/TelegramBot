@@ -2257,6 +2257,7 @@ const SITE_STATE_LABELS = {
   captcha: "需要人机验证",
   failed: "失败",
   unknown: "未知",
+  pending: "待复核",
 };
 
 function showSiteCheckinSettings(module) {

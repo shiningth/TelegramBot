@@ -19,6 +19,16 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.13.2
+
+- 站点签到：`method=browser` 的 TRAWL 调用超时不再判失败——Turnstile 首轮解题常在 80s 以上，
+  而我们这边先超时，浏览器里的签到请求其实已经发出去并生效（OurBits 11-14 01:11 就是这样被误报失败）。
+  现在超时后补一次快速复核（不解验证、短超时），确认已签就记 `already`，仍不确定记新状态 `pending`（待复核）。
+- `_trawl_scrape` 超时预算放宽：服务端 `timeout` 至少 90s、客户端至少 150s（原为 30s / 60s）。
+- pt.0ff.cc 这类「把今日签到当补签」的站点：ajax 返回「补签卡不足」不再记失败，改记 `pending`
+  （多见于还没到开签时段，下一次调度会重试）。
+- 面板与全局日志新增状态「待复核」；单测 +3（超时→pending、超时后复核成功、补签卡→pending），全套 385 passed。
+
 ## 2026.11.13.1
 
 - 站点签到新增 `method=browser`：走 TRAWL 原生 `/scrape`（Camoufox 真浏览器 + 内置 Turnstile），页面自身回调提交后

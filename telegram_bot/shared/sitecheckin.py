@@ -161,6 +161,9 @@ def _json_state(text: str) -> tuple[str, str] | None:
     message = str(data.get("msg") or "").strip()
     if "已经签到" in message or "已签到" in message:
         return "already", message or "今日已签到"
+    if "补签卡" in message:
+        # 站点把「今日签到」当补签处理（多见于还没到开签时间），不算失败
+        return "pending", message or "补签卡不足，可能还没到今日签到时段"
     if str(data.get("ret")) in ("0", "1"):
         return "signed", message or "签到成功"
     return "failed", message or "站点返回失败"
@@ -293,10 +296,15 @@ def _trawl_scrape(
         "url": url,
         "cookies": jar,
         "solveEmbeddedCaptchas": bool(solve),
-        "timeout": max(30, timeout) * 1000,
+        # Turnstile 首轮解题可能要 60–120 秒，给足服务端预算
+        "timeout": max(90, timeout * 3) * 1000,
     }
     try:
-        resp = httpx.post(base + "/scrape", json=payload, timeout=max(60, timeout + 40))
+        resp = httpx.post(
+            base + "/scrape",
+            json=payload,
+            timeout=max(150, timeout * 4),
+        )
         data = resp.json()
     except Exception:  # noqa: BLE001
         return {}
@@ -315,14 +323,20 @@ def _sign_via_browser(
     already_keywords: str,
     today: str,
 ) -> "SignResult":
-    """用 TRAWL 跑真浏览器：Turnstile 通过后页面自身回调会提交表单，再取一次看结果。"""
+    """用 TRAWL 跑真浏览器：Turnstile 通过后页面自身回调会提交表单，再取一次看结果。
+
+    注意：TRAWL 那趟即使我们这边等超时了，浏览器里的签到请求往往已经发出去并生效，
+    所以超时一律落到 pending 并补一次快速复核，不能直接判失败。
+    """
     solved: list[str] = []
     html = ""
-    for attempt in (1, 2):
+    state = "unknown"
+    why = ""
+    for _attempt in (1, 2):
         data = _trawl_scrape(url, endpoint, cookie, timeout)
         if not data:
-            result.detail = "TRAWL 调用失败（检查 FlareSolverr 地址是否指向 TRAWL）"
-            return _finish(result, started)
+            state = "timeout"
+            continue
         solved = [str(x) for x in (data.get("captchasSolved") or [])] or solved
         html = str(data.get("html") or html)
         result.http = int(data.get("statusCode") or result.http or 0)
@@ -341,10 +355,34 @@ def _sign_via_browser(
         if state == "login":
             result.detail = "Cookie 已失效，请重新复制"
             return _finish(result, started)
-        if state not in ("captcha", "slider"):
-            # 页面既不可判定也没卡在验证上——第一趟就结束，避免无谓的一次浏览器请求
-            if attempt == 1 and state == "unknown":
-                continue
+
+    # 复核：不解验证、短超时，只为确认浏览器那趟是否其实已经签上了
+    verify = _trawl_scrape(url, endpoint, cookie, min(timeout, 40), solve=False)
+    verify_html = str((verify or {}).get("html") or "")
+    if verify_html:
+        _stash(result, verify_html)
+        result.page_text = page_text(verify_html)[:400]
+        result.http = int((verify or {}).get("statusCode") or result.http or 0)
+        st2, why2 = classify(
+            verify_html,
+            final_url=str((verify or {}).get("url") or url),
+            success_keywords=success_keywords,
+            already_keywords=already_keywords,
+        )
+        if st2 in ("already", "signed") and not _stale_page(st2, result.dates, today):
+            result.state = st2
+            result.detail = (why2 or "签到成功") + (
+                "（浏览器请求超时，复核确认已完成）" if state == "timeout" else ""
+            )
+            return _finish(result, started)
+        if st2 == "login":
+            result.detail = "Cookie 已失效，请重新复制"
+            return _finish(result, started)
+
+    if state == "timeout":
+        result.state = "pending"
+        result.detail = "浏览器请求超时，签到结果待复核（下次调度会再查）"
+        return _finish(result, started)
     if state == "captcha":
         result.state = "captcha"
         extra = f"（TRAWL 已处理：{'、'.join(solved)}）" if solved else ""

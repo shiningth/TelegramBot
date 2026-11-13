@@ -34,6 +34,7 @@ _LOG_LIMIT = 400
 STATE_LABELS = {
     "signed": "签到成功",
     "already": "今日已签",
+    "pending": "待复核",
     "login": "登录失效",
     "slider": "滑块未过",
     "captcha": "需要人机验证",

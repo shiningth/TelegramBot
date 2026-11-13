@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -268,6 +268,92 @@ def _fetch_via_flaresolverr(url: str, endpoint: str, timeout: int) -> str:
     return str(solution.get("response") or "")
 
 
+def _trawl_scrape(
+    url: str,
+    endpoint: str,
+    cookie: str,
+    timeout: int,
+    solve: bool = True,
+) -> dict[str, Any]:
+    """走 TRAWL 原生 /scrape（Camoufox 真浏览器 + 内置 Turnstile 支持）。
+
+    TRAWL 的 /v1 兼容口默认跳过嵌入控件解题，只有原生 /scrape 才会处理
+    Turnstile 之类的小组件。返回原始响应字典，失败返回空字典。
+    """
+    base = (endpoint or "").rstrip("/")
+    if not base:
+        return {}
+    # TRAWL 只认 cookies 数组；单给 Cookie 头会被忽略（实测会掉登录态）。
+    host = urlsplit(url).hostname or ""
+    jar = [
+        {"name": name, "value": value, "domain": host, "path": "/"}
+        for name, value in parse_cookie(cookie).items()
+    ]
+    payload = {
+        "url": url,
+        "cookies": jar,
+        "solveEmbeddedCaptchas": bool(solve),
+        "timeout": max(30, timeout) * 1000,
+    }
+    try:
+        resp = httpx.post(base + "/scrape", json=payload, timeout=max(60, timeout + 40))
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _sign_via_browser(
+    result: "SignResult",
+    started: float,
+    *,
+    url: str,
+    cookie: str,
+    endpoint: str,
+    timeout: int,
+    success_keywords: str,
+    already_keywords: str,
+    today: str,
+) -> "SignResult":
+    """用 TRAWL 跑真浏览器：Turnstile 通过后页面自身回调会提交表单，再取一次看结果。"""
+    solved: list[str] = []
+    html = ""
+    for attempt in (1, 2):
+        data = _trawl_scrape(url, endpoint, cookie, timeout)
+        if not data:
+            result.detail = "TRAWL 调用失败（检查 FlareSolverr 地址是否指向 TRAWL）"
+            return _finish(result, started)
+        solved = [str(x) for x in (data.get("captchasSolved") or [])] or solved
+        html = str(data.get("html") or html)
+        result.http = int(data.get("statusCode") or result.http or 0)
+        _stash(result, html)
+        result.page_text = page_text(html)[:400]
+        state, why = classify(
+            html,
+            final_url=str(data.get("url") or url),
+            success_keywords=success_keywords,
+            already_keywords=already_keywords,
+        )
+        if state in ("already", "signed") and not _stale_page(state, result.dates, today):
+            result.state = state
+            result.detail = why or ("今日已签到" if state == "already" else "签到成功")
+            return _finish(result, started)
+        if state == "login":
+            result.detail = "Cookie 已失效，请重新复制"
+            return _finish(result, started)
+        if state not in ("captcha", "slider"):
+            # 页面既不可判定也没卡在验证上——第一趟就结束，避免无谓的一次浏览器请求
+            if attempt == 1 and state == "unknown":
+                continue
+    if state == "captcha":
+        result.state = "captcha"
+        extra = f"（TRAWL 已处理：{'、'.join(solved)}）" if solved else ""
+        result.detail = "Turnstile 未通过" + extra
+        return _finish(result, started)
+    result.detail = "浏览器签到后仍未看到签到结果"
+    return _finish(result, started)
+
+
 def sign_site(
     *,
     url: str,
@@ -295,6 +381,19 @@ def sign_site(
     if not cookies:
         result.detail = "没有填写 Cookie"
         return result
+
+    if method == "browser" and flaresolverr:
+        return _sign_via_browser(
+            result,
+            started,
+            url=url,
+            cookie=cookie,
+            endpoint=flaresolverr,
+            timeout=timeout,
+            success_keywords=success_keywords,
+            already_keywords=already_keywords,
+            today=today,
+        )
 
     try:
         with httpx.Client(

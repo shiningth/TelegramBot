@@ -13,6 +13,7 @@ from telegram_bot.shared.sitecheckin import (
     SignResult,
     classify,
     parse_cookie,
+    sign_site,
     signed_dates,
     _json_state,
 )
@@ -173,4 +174,93 @@ def test_json_state_maps_ajax_replies():
     assert _json_state('{"ret":0,"msg":"签到成功"}')[0] == "signed"
     assert _json_state('{"ret":-2,"msg":"补签卡不足"}')[0] == "failed"
     assert _json_state("<html>签到成功</html>") is None
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def test_browser_method_uses_trawl_scrape_and_reads_second_page(monkeypatch):
+    """method=browser：走 TRAWL /scrape，第一趟是 Turnstile 页，第二趟已签上。"""
+    from telegram_bot.shared import sitecheckin as sitecheckin_module
+
+    pages = [
+        {
+            "html": "<html>请耐心等待签到验证程序加载.....<div class='cf-turnstile'></div></html>",
+            "captchasSolved": ["turnstile"],
+            "statusCode": 200,
+        },
+        {"html": "<html>签到成功 本次签到获得 100 个魔力值</html>", "statusCode": 200},
+    ]
+    calls = []
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        calls.append((url, json))
+        return _FakeResponse(pages[min(len(calls) - 1, len(pages) - 1)])
+
+    monkeypatch.setattr(sitecheckin_module.httpx, "post", fake_post)
+
+    result = sign_site(
+        url="https://ourbits.club/attendance.php",
+        cookie="ourbits_jwt=abc",
+        method="browser",
+        flaresolverr="http://192.168.50.105:8193",
+    )
+
+    assert result.state == "signed"
+    assert len(calls) == 2
+    assert calls[0][0].endswith("/scrape")
+    assert calls[0][1]["solveEmbeddedCaptchas"] is True
+    assert calls[0][1]["cookies"] == [
+        {"name": "ourbits_jwt", "value": "abc", "domain": "ourbits.club", "path": "/"}
+    ]
+
+
+def test_browser_method_reports_captcha_when_trawl_solves_nothing(monkeypatch):
+    from telegram_bot.shared import sitecheckin as sitecheckin_module
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        return _FakeResponse(
+            {
+                "html": "<html>请耐心等待签到验证程序加载.....<div class='cf-turnstile'></div></html>",
+                "captchasSolved": [],
+                "statusCode": 200,
+            }
+        )
+
+    monkeypatch.setattr(sitecheckin_module.httpx, "post", fake_post)
+
+    result = sign_site(
+        url="https://ourbits.club/attendance.php",
+        cookie="ourbits_jwt=abc",
+        method="browser",
+        flaresolverr="http://192.168.50.105:8193",
+    )
+
+    assert result.state == "captcha"
+    assert "Turnstile 未通过" in result.detail
+
+
+def test_browser_method_without_trawl_endpoint_is_reported(monkeypatch):
+    from telegram_bot.shared import sitecheckin as sitecheckin_module
+
+    def fake_post(url, json=None, timeout=None, **kwargs):
+        return _FakeResponse({})
+
+    monkeypatch.setattr(sitecheckin_module.httpx, "post", fake_post)
+
+    result = sign_site(
+        url="https://ourbits.club/attendance.php",
+        cookie="ourbits_jwt=abc",
+        method="browser",
+        flaresolverr="http://192.168.50.105:8193",
+    )
+
+    assert result.state == "failed"
+    assert "TRAWL" in result.detail
+
 

@@ -2206,7 +2206,7 @@ async function saveCheckinConfig() {
 
 // --------------------------------------------------------------- 站点签到（网页）
 
-const SITE_METHOD_LABELS = { auto: "自动识别", get: "只取页面", post: "提交表单" };
+const SITE_METHOD_LABELS = { auto: "自动识别", get: "只取页面", post: "提交表单", browser: "浏览器（TRAWL）" };
 
 function siteCheckinCard(site) {
   const last = site.last || null;
@@ -3181,15 +3181,10 @@ scheduleLogRefreshLoop();
     true
   );
 
-  saveBtn.addEventListener("click", async () => {
+  saveBtn.addEventListener("click", () => {
     if (!state) return hide();
-    const target = state.save;
-    target.click();
-    // 保存是异步的：等它的提示落地再收起，失败时保留提示条
-    const before = target.textContent;
-    setTimeout(() => {
-      if (target.textContent === before) hide();
-    }, 1600);
+    state.save.click();
+    hide();
   });
 
   revertBtn.addEventListener("click", () => {

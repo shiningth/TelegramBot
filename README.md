@@ -28,13 +28,12 @@ Portainer → Stacks → Add stack → 粘贴 [`portainer-stack.yml`](portainer-
 | AI 对话 / 生图 / 解密 | 触发词、上下文、模型服务可配，兼容 OpenAI 与 Anthropic |
 | 群友画像 | 按群聊历史生成带原消息引用的画像 |
 | 自动签到 | Cron 定时给指定 bot 发命令；网络抖动自动补签，失败/补发成功可私聊通知 |
-| 站点签到（网页） | 用 Cookie 直连 PT 站签到页；站点在面板增删，不用重新打包 |
 | 磁力数据导入（momo 专用） | 群内回复 CSV + `/导入`，上传前按哈希向 momo 预检排重 |
 | 频道自动采集 | 独立个人会话读频道 ed2k 帖，解析番号与封面后写入 momo |
 | 消息转发 / 媒体工具 / 小游戏 / 归档 | 转发复制、GIF、词云、贴纸、幸运词、SQLite 文本归档 |
 | 管理后台 | 模块开关、配置、运行状态、日志、AI 用量 |
 
-## 三条重点链路
+## 两条重点链路
 
 ### 一、频道自动采集（ed2k → momo）
 
@@ -62,19 +61,6 @@ Portainer → Stacks → Add stack → 粘贴 [`portainer-stack.yml`](portainer-
 python3 scripts/repair_missing_covers.py --dry-run   # 先看会改哪些
 python3 scripts/repair_missing_covers.py --limit 50  # 默认每 10 秒一条
 ```
-
-### 三、站点签到（PT 站 / 论坛）
-
-NexusPHP 这类站点的签到是一次网页请求，没有官方机器人。这里直接替你去请求签到页：
-
-1. 后台「自动签到 → 站点签到」勾启用，点「新增站点」；
-2. 填名称、签到页地址（如 `https://站点/attendance.php`）、定时（默认 `10 8 * * *`）、方式（一般留「自动识别」）；
-3. Cookie：浏览器登录后 F12 → Network → 刷新 → 复制请求头的整条 `Cookie` 粘进来。保存后只显示「已保存」，换 Cookie 重新粘即可；
-4. 点「立即签到」当场验证，结果写进下方「签到日志」（全局日志保留 30 天）。
-
-支持普通 GET、POST 表单（自动识别字段）、Cloudflare（配 FlareSolverr 代取）、以及**滑动/拖动验证**——页面引用的 `/slide_check_*.js` 里藏着 token 地址，脚本带 `X-Requested-With` 请求一次即可拿到放行 Cookie，不需要无头浏览器。
-
-Cookie 过期时状态会显示「登录失效」，重新粘一条即可。
 
 ## 首次配置
 

@@ -9,7 +9,13 @@ import pytest
 from telegram_bot.config import SiteCheckinConfig, SiteCheckinSiteConfig, site_checkin_config_from_dict
 from telegram_bot.modules.base import ModuleCard
 from telegram_bot.modules.site_checkin import SiteCheckinModule, is_due
-from telegram_bot.shared.sitecheckin import SignResult, classify, parse_cookie
+from telegram_bot.shared.sitecheckin import (
+    SignResult,
+    classify,
+    parse_cookie,
+    signed_dates,
+    _json_state,
+)
 
 
 def make_card() -> ModuleCard:
@@ -130,46 +136,41 @@ def test_handle_message_returns_ignored_with_module_id(tmp_path):
     assert result.module_id == 'site_checkin'
 
 
+def test_signed_dates_reads_calendar_events():
+    html = '<script>let events = JSON.parse(\'[{"start":"2026-11-13","title":25}]\')</script>'
+    assert signed_dates(html) == {"2026-11-13"}
 
-def test_classify_flags_turnstile_as_captcha():
-    from telegram_bot.shared.sitecheckin import classify
 
-    html = (
-        '<form method="POST" id="attendance">'
-        '<div class="cf-turnstile" data-sitekey="0x4AAAAAAADWQPWY98KpMVND"></div>'
-        "</form><p>请耐心等待签到验证程序加载.....</p>"
-        "<p>首次签到获得 10 个魔力值。</p>"
+def test_signed_page_without_today_marker_is_downgraded(tmp_path):
+    """页面回显「签到成功」但日历里没有今天 → 不能算签上。"""
+    module = make_module(tmp_path)
+    site = module.config.sites[0]
+    result = SignResult(
+        state="signed",
+        detail="签到成功 这是您的第 1201 次签到",
+        dates=("2026-11-12",),
     )
-    state, why = classify(html, final_url="https://ourbits.club/attendance.php")
-    assert state == "captcha"
-    assert "Turnstile" in why
+    refined = module._refine_already(site, result)
+    assert refined.state == "unknown"
+    assert "未见今日" in refined.detail
 
 
-def test_classify_ignores_rule_text_about_bonus():
-    from telegram_bot.shared.sitecheckin import classify
-
-    html = "<p>首次签到获得 10 个魔力值，每次签到可额外获得 1 个魔力值。</p>"
-    state, _ = classify(html, final_url="https://example.com/attendance.php")
-    assert state == "unknown"
-
-
-def test_refine_already_uses_sign_count(tmp_path):
+def test_same_day_same_count_with_today_marker_is_already(tmp_path):
     module = make_module(tmp_path)
     site = module.config.sites[0]
-    first = SignResult(state="signed", detail="签到成功 这是您的第 1201 次签到，已连续签到 4 天", http=200)
-    module._record(site, module._refine_already(site, first))
-    again = SignResult(state="signed", detail="签到成功 这是您的第 1201 次签到，已连续签到 4 天", http=200)
-    refined = module._refine_already(site, again)
+    today = datetime.now().strftime("%Y-%m-%d")
+    module._state["last"] = {
+        site.id: {"at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "count": 1201}
+    }
+    result = SignResult(state="signed", detail="签到成功 第 1201 次签到", dates=(today,))
+    refined = module._refine_already(site, result)
     assert refined.state == "already"
-    assert "1201" in refined.detail
+    assert "日历已标记今日" in refined.detail
 
 
-def test_refine_keeps_signed_when_count_grows(tmp_path):
-    from datetime import datetime, timedelta
+def test_json_state_maps_ajax_replies():
+    assert _json_state('{"ret":-1,"msg":"已经签到"}') == ("already", "已经签到")
+    assert _json_state('{"ret":0,"msg":"签到成功"}')[0] == "signed"
+    assert _json_state('{"ret":-2,"msg":"补签卡不足"}')[0] == "failed"
+    assert _json_state("<html>签到成功</html>") is None
 
-    module = make_module(tmp_path)
-    site = module.config.sites[0]
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
-    module._state.setdefault("last", {})[site.id] = {"at": yesterday, "count": 1200, "state": "signed"}
-    fresh = SignResult(state="signed", detail="签到成功 这是您的第 1201 次签到", http=200)
-    assert module._refine_already(site, fresh).state == "signed"

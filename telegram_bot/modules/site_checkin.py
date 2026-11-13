@@ -254,17 +254,26 @@ class SiteCheckinModule:
     def _refine_already(
         self, site: SiteCheckinSiteConfig, result: SignResult
     ) -> SignResult:
-        """签到页永远显示「上一次签到结果」，靠次数是否变化判断今天签没签。"""
+        """签到页永远显示「上一次签到结果」，靠次数与日历标记判断今天签没签。"""
         if result.state != "signed":
             return result
         count = _sign_count(result.detail)
+        today = datetime.now().strftime("%Y-%m-%d")
+        dates = set(result.dates or ())
+        marked = bool(dates) and today in dates
+        if dates and not marked:
+            # 页面说成功、日历里却没有今天 → 大概率只是回显上一次结果
+            result.state = "unknown"
+            result.detail = "页面未见今日签到记录（可能未生效）"
+            return result
         if count is None:
             return result
         previous = (self._state.get("last") or {}).get(site.id) or {}
-        same_day = str(previous.get("at") or "")[:10] == datetime.now().strftime("%Y-%m-%d")
+        same_day = str(previous.get("at") or "")[:10] == today
         if same_day and previous.get("count") == count:
             result.state = "already"
-            result.detail = f"今日已签（第 {count} 次）"
+            tail = " · 日历已标记今日" if marked else ""
+            result.detail = f"今日已签（第 {count} 次{tail}）"
         return result
 
     def _record(self, site: SiteCheckinSiteConfig, result: SignResult) -> dict[str, Any]:

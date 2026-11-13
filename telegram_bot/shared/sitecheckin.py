@@ -12,6 +12,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 from urllib.parse import urljoin
 
@@ -63,6 +64,7 @@ class SignResult:
     elapsed_ms: int = 0
     debug_html: str = ""
     page_text: str = ""
+    dates: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -124,6 +126,44 @@ def _snippet(text: str, word: str, width: int = 48) -> str:
     if index < 0:
         return word
     return text[index : index + width].strip()
+
+
+_EVENT_DATE_RE = re.compile(r"""["']start["']\s*:\s*["'](\d{4}-\d{2}-\d{2})["']""")
+
+
+def signed_dates(html: str) -> set[str]:
+    """从页面日历脚本里取出「已签到」的日期（如 pt.0ff.cc 的 FullCalendar events）。"""
+    return set(_EVENT_DATE_RE.findall(html or ""))
+
+
+def _stash(result: "SignResult", html: str) -> None:
+    """存调试片段；顺带把日历里的已签日期抠出来（整页 45KB，截断后就取不到了）。"""
+    result.debug_html = (html or "")[:6000]
+    result.dates = tuple(sorted(signed_dates(html)))
+
+
+def _stale_page(state: str, dates: tuple[str, ...], today: str) -> bool:
+    """页面写着「签到成功」但日历里没有今天 → 多半只是回显上一次结果。"""
+    return state == "signed" and bool(dates) and today not in dates
+
+
+def _json_state(text: str) -> tuple[str, str] | None:
+    """站点用 ajax 返回 JSON（如 {"ret":0,"msg":"..."}）时，直接据此判定状态。"""
+    body = (text or "").strip()
+    if not body.startswith("{") or '"ret"' not in body:
+        return None
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or "ret" not in data:
+        return None
+    message = str(data.get("msg") or "").strip()
+    if "已经签到" in message or "已签到" in message:
+        return "already", message or "今日已签到"
+    if str(data.get("ret")) in ("0", "1"):
+        return "signed", message or "签到成功"
+    return "failed", message or "站点返回失败"
 
 
 def classify(
@@ -243,6 +283,7 @@ def sign_site(
 ) -> SignResult:
     """执行一次签到。永不抛异常。"""
     started = time.monotonic()
+    today = date.today().isoformat()
     cookies = parse_cookie(cookie)
     req_headers = {"User-Agent": DEFAULT_UA, "Accept-Language": "zh-CN,zh;q=0.9"}
     req_headers.update(parse_headers(headers))
@@ -280,9 +321,9 @@ def sign_site(
                 already_keywords=already_keywords,
             )
             result.page_text = page_text(html)[:400]
-            result.debug_html = html[:6000]
+            _stash(result, html)
 
-            if state in ("already", "signed"):
+            if state in ("already", "signed") and not _stale_page(state, result.dates, today):
                 result.state = state
                 result.detail = why or ("今日已签到" if state == "already" else "签到成功")
                 return _finish(result, started)
@@ -303,9 +344,11 @@ def sign_site(
                         success_keywords=success_keywords,
                         already_keywords=already_keywords,
                     )
-                    result.debug_html = html[:6000]
+                    _stash(result, html)
                     result.page_text = page_text(html)[:400]
-                    if state in ("already", "signed"):
+                    if state in ("already", "signed") and not _stale_page(
+                        state, result.dates, today
+                    ):
                         result.state = state
                         result.detail = why or "签到成功"
                         return _finish(result, started)
@@ -328,9 +371,9 @@ def sign_site(
                 )
                 result.http = resp.status_code
                 result.final_url = str(resp.url)
-                result.debug_html = html[:6000]
+                _stash(result, html)
                 result.page_text = page_text(html)[:400]
-                if state in ("already", "signed"):
+                if state in ("already", "signed") and not _stale_page(state, result.dates, today):
                     result.state = state
                     result.detail = why or "签到成功"
                     return _finish(result, started)
@@ -343,23 +386,35 @@ def sign_site(
                 action = sign_url or (urljoin(url, parsed[0]) if parsed and parsed[0] else url)
                 form_method = (parsed[1] if parsed else "post").upper()
                 fields = dict(parsed[2]) if parsed else {}
-                fields.update(parse_pairs(post_data))
+                for name, value in parse_pairs(post_data).items():
+                    fields[name] = str(value).replace("{date}", today).replace("{today}", today)
+                post_headers = dict(req_headers)
+                if sign_url and "ajax" in sign_url:
+                    post_headers["X-Requested-With"] = "XMLHttpRequest"
+                    post_headers["Referer"] = url
                 if form_method == "GET":
-                    resp = client.get(action, params=fields)
+                    resp = client.get(action, params=fields, headers=post_headers)
                 else:
-                    resp = client.post(action, data=fields)
+                    resp = client.post(action, data=fields, headers=post_headers)
                 html = resp.text or ""
                 result.http = resp.status_code
                 result.final_url = str(resp.url)
-                result.debug_html = html[:6000]
+                _stash(result, html)
                 result.page_text = page_text(html)[:400]
+                json_state = _json_state(html)
+                if json_state:
+                    result.state, detail = json_state
+                    result.detail = detail
+                    if result.state == "failed":
+                        result.detail = f"站点返回失败：{detail}"
+                    return _finish(result, started)
                 state, why = classify(
                     html,
                     final_url=str(resp.url),
                     success_keywords=success_keywords,
                     already_keywords=already_keywords,
                 )
-                if state in ("signed", "already"):
+                if state in ("signed", "already") and not _stale_page(state, result.dates, today):
                     result.state = state
                     result.detail = why or "签到成功"
                     return _finish(result, started)

@@ -2206,7 +2206,7 @@ async function saveCheckinConfig() {
 
 // --------------------------------------------------------------- 站点签到（网页）
 
-const SITE_METHOD_LABELS = { auto: "自动识别", get: "只取页面", post: "提交表单", browser: "浏览器（TRAWL）" };
+const SITE_METHOD_LABELS = { auto: "自动识别", get: "只取页面", post: "提交表单", browser: "浏览器（TRAWL）", quiz: "答题（看图选片名）" };
 
 function siteCheckinCard(site) {
   const last = site.last || null;

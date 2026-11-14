@@ -8,12 +8,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import html as html_lib
 import re
 import time
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -405,6 +407,172 @@ def _sign_via_browser(
     return _finish(result, started)
 
 
+_QUIZ_POSTER_RE = re.compile(r"<img[^>]+src='([^']*?/pic/attend/[^']+)'", re.I)
+_QUIZ_RADIO_RE = re.compile(
+    r"<input[^>]*type='radio'[^>]*name='([^']+)'[^>]*value='([^']+)'[^>]*>\s*(?:</?\w+[^>]*>)*\s*([^<]+)",
+    re.I,
+)
+_QUIZ_SUBMIT_RE = re.compile(
+    r"<input[^>]*type='submit'[^>]*name='([^']+)'[^>]*value='([^']*)'", re.I
+)
+_QUIZ_WRONG_MARKERS = ("回答错误", "答案错误", "选择错误", "答错", "扣除")
+
+
+def load_quiz_table(path: str | Path) -> dict[str, str]:
+    """读取「封面 md5 → 正确片名」表。文件不存在或格式不对时返回空表。"""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    posters = data.get("posters") if isinstance(data, dict) else None
+    if not isinstance(posters, dict):
+        return {}
+    table: dict[str, str] = {}
+    for key, value in posters.items():
+        key = str(key or "").strip().lower()
+        value = str(value or "").strip()
+        if key and value:
+            table[key] = value
+    return table
+
+
+def _quiz_options(html: str) -> list[tuple[str, str, str]]:
+    """返回 [(name, value, 文案)]。"""
+    return [
+        (m.group(1), m.group(2), html_lib.unescape(m.group(3)).strip())
+        for m in _QUIZ_RADIO_RE.finditer(html)
+    ]
+
+
+def _quiz_pick(options: list[tuple[str, str, str]], title: str) -> tuple[str, str, str] | None:
+    """按片名挑选项：先精确，再忽略空白，最后前缀。"""
+    want = _squash(title)
+    for opt in options:
+        if opt[2] == title:
+            return opt
+    for opt in options:
+        if _squash(opt[2]) == want:
+            return opt
+    for opt in options:
+        if want and _squash(opt[2]).startswith(want):
+            return opt
+    return None
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _sign_via_quiz(
+    result: SignResult,
+    started: float,
+    *,
+    url: str,
+    cookie: str,
+    headers: dict[str, str],
+    timeout: int,
+    success_keywords: str,
+    already_keywords: str,
+    today: str,
+    table_path: str,
+    tries: int = 8,
+) -> SignResult:
+    """答题式签到：读题（封面）→ 查表得片名 → 选中同名选项 → 提交。
+
+    表里没有这张封面时只「换题」，绝不瞎猜（答错会被扣魔力）。
+    """
+    table = load_quiz_table(table_path)
+    if not table:
+        result.detail = f"题库为空（{table_path}），未提交"
+        return _finish(result, started)
+
+    missing: list[str] = []
+    with httpx.Client(
+        cookies=parse_cookie(cookie), headers=headers, timeout=timeout, follow_redirects=True
+    ) as client:
+        for _ in range(max(1, tries)):
+            resp = client.get(url)
+            html = resp.text
+            result.http = resp.status_code
+            result.final_url = str(resp.url)
+            result.debug_html = html
+            state, why = classify(
+                html,
+                final_url=str(resp.url),
+                success_keywords=success_keywords,
+                already_keywords=already_keywords,
+            )
+            if state in ("already", "signed"):
+                result.state = state
+                result.detail = why or "签到成功"
+                return _finish(result, started)
+            if state == "login":
+                result.detail = "Cookie 已失效，请重新复制"
+                return _finish(result, started)
+
+            options = _quiz_options(html)
+            poster = _QUIZ_POSTER_RE.search(html)
+            if not options or not poster:
+                result.state = state if state != "unknown" else "unknown"
+                result.detail = "页面里没找到答题表单"
+                return _finish(result, started)
+
+            image_url = urljoin(str(resp.url), html_lib.unescape(poster.group(1)))
+            try:
+                image = client.get(image_url).content
+            except Exception as exc:  # 取封面失败就换一道题
+                missing.append(f"封面下载失败：{exc}")
+                continue
+            md5 = hashlib.md5(image).hexdigest()
+            title = table.get(md5)
+            if not title:
+                missing.append(md5[:8])
+                continue
+
+            picked = _quiz_pick(options, title)
+            if picked is None:
+                missing.append(f"{title}（选项里没有）")
+                continue
+
+            name, value, label = picked
+            submit = _QUIZ_SUBMIT_RE.search(html)
+            payload = {name: html_lib.unescape(value)}
+            if submit:
+                payload[submit.group(1)] = submit.group(2) or "提交"
+            else:
+                payload["submit"] = "提交"
+            post = client.post(
+                url, data=payload, headers={"Referer": str(resp.url)}
+            )
+            result.http = post.status_code
+            result.debug_html = post.text
+            result.final_url = str(post.url)
+            text = page_text(post.text)
+            st2, why2 = classify(
+                post.text,
+                final_url=str(post.url),
+                success_keywords=success_keywords,
+                already_keywords=already_keywords,
+            )
+            if st2 in ("already", "signed"):
+                result.state = st2
+                result.detail = why2 or f"签到成功（答题：{label}）"
+                return _finish(result, started)
+            if any(word in text for word in _QUIZ_WRONG_MARKERS):
+                result.state = "failed"
+                result.detail = f"答题未通过（提交：{label}）"
+                return _finish(result, started)
+            result.state = "unknown"
+            result.detail = f"提交后没看到签到结果（提交：{label}）"
+            return _finish(result, started)
+
+    result.state = "unknown"
+    tail = f"（换题 {len(missing)} 次仍没命中：{'、'.join(missing[-3:])}）" if missing else ""
+    result.detail = "题库里没有当前封面" + tail
+    return _finish(result, started)
+
+
 def sign_site(
     *,
     url: str,
@@ -417,6 +585,7 @@ def sign_site(
     already_keywords: str = "",
     timeout: int = 40,
     flaresolverr: str = "",
+    quiz_table: str = "",
 ) -> SignResult:
     """执行一次签到。永不抛异常。"""
     started = time.monotonic()
@@ -432,6 +601,20 @@ def sign_site(
     if not cookies:
         result.detail = "没有填写 Cookie"
         return result
+
+    if method == "quiz":
+        return _sign_via_quiz(
+            result,
+            started,
+            url=url,
+            cookie=cookie,
+            headers=req_headers,
+            timeout=timeout,
+            success_keywords=success_keywords,
+            already_keywords=already_keywords,
+            today=today,
+            table_path=quiz_table or str(Path("runtime/data/site_checkin_quiz.json")),
+        )
 
     if method == "browser" and flaresolverr:
         return _sign_via_browser(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from telegram_bot.config import SiteCheckinConfig, SiteCheckinSiteConfig, site_checkin_config_from_dict
 from telegram_bot.modules.base import ModuleCard
 from telegram_bot.modules.site_checkin import SiteCheckinModule, is_due
+from telegram_bot.shared import sitecheckin
 from telegram_bot.shared.sitecheckin import (
     SignResult,
     classify,
@@ -16,6 +19,7 @@ from telegram_bot.shared.sitecheckin import (
     sign_site,
     signed_dates,
     _json_state,
+    load_quiz_table,
 )
 
 
@@ -294,3 +298,114 @@ def test_json_state_treats_retroactive_card_shortage_as_pending():
     assert _json_state('{"ret":-5,"msg":"补签卡不足"}')[0] == "pending"
 
 
+
+# ---------------------------------------------------------------- 答题式签到
+QUIZ_HTML = """<html><body><form action='attendance.php' method='post'>
+<img src='/pic/attend/2026-11-15/abc.jpg'/>
+<label><input type='radio' name='ban_robot' value='2026-11-15 00:02:02.510673&17'>棋士</label>
+<label><input type='radio' name='ban_robot' value='2026-11-15 00:02:02.510673&18'>灵笼</label>
+<input type='submit' name='submit' value='提交'>
+</form></body></html>"""
+
+QUIZ_OK = "<html><body>签到成功，这是您的第 807 次签到，已连续签到 2 天，本次签到获得 105 个魔力值。</body></html>"
+
+
+class _Resp:
+    def __init__(self, text, url="https://tjupt.org/attendance.php", content=b"", status=200):
+        self.text = text
+        self.content = content
+        self.url = url
+        self.status_code = status
+
+
+def test_load_quiz_table_handles_missing_and_bad_files(tmp_path):
+    assert load_quiz_table(tmp_path / "nope.json") == {}
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert load_quiz_table(bad) == {}
+    good = tmp_path / "good.json"
+    good.write_text('{"posters": {"ABC": " 棋士 "}}', encoding="utf-8")
+    assert load_quiz_table(good) == {"abc": "棋士"}
+
+
+def test_quiz_options_and_pick():
+    from telegram_bot.shared.sitecheckin import _quiz_options, _quiz_pick
+
+    options = _quiz_options(QUIZ_HTML)
+    assert [o[2] for o in options] == ["棋士", "灵笼"]
+    picked = _quiz_pick(options, "灵 笼")
+    assert picked is not None and picked[1].endswith("&18")
+
+
+def test_quiz_method_answers_by_poster_hash(tmp_path, monkeypatch):
+    poster = b"\xff\xd8fakejpeg"
+    md5 = hashlib.md5(poster).hexdigest()
+    table = tmp_path / "site_checkin_quiz.json"
+    table.write_text(json.dumps({"posters": {md5: "棋士"}}), encoding="utf-8")
+
+    posts = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            if "/pic/attend/" in url:
+                return _Resp("", url=url, content=poster)
+            return _Resp(QUIZ_HTML)
+
+        def post(self, url, data=None, headers=None):
+            posts.append(data)
+            return _Resp(QUIZ_OK)
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    result = sign_site(
+        url="https://tjupt.org/attendance.php",
+        cookie="access_token=abc",
+        method="quiz",
+        quiz_table=str(table),
+    )
+    assert result.state == "signed"
+    assert posts and posts[0]["ban_robot"].endswith("&17")
+
+
+def test_quiz_method_skips_unknown_poster_without_guessing(tmp_path, monkeypatch):
+    table = tmp_path / "site_checkin_quiz.json"
+    table.write_text(json.dumps({"posters": {"deadbeef": "棋士"}}), encoding="utf-8")
+    posts = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            if "/pic/attend/" in url:
+                return _Resp("", url=url, content=b"another-poster")
+            return _Resp(QUIZ_HTML)
+
+        def post(self, url, data=None, headers=None):  # pragma: no cover - 不该被调用
+            posts.append(data)
+            return _Resp(QUIZ_OK)
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    result = sign_site(
+        url="https://tjupt.org/attendance.php",
+        cookie="access_token=abc",
+        method="quiz",
+        quiz_table=str(table),
+    )
+    assert result.state == "unknown"
+    assert "题库" in result.detail
+    assert posts == []

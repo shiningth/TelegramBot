@@ -379,10 +379,15 @@ class SiteCheckinModule:
             already_keywords=site.already_keywords,
             timeout=self.config.timeout_seconds,
             flaresolverr=self.config.flaresolverr,
+            quiz_table=str(self._quiz_table_path()),
         )
         self._save_debug(site, result)
         # 结果统一由 _record 写一条到全局日志，这里不再重复打一遍
         return result
+
+    def _quiz_table_path(self) -> Path:
+        """答题式签到的题库（封面 md5 → 正确片名），与状态文件同目录。"""
+        return Path(self.config.state_store).parent / "site_checkin_quiz.json"
 
     def _save_debug(self, site: SiteCheckinSiteConfig, result: SignResult) -> None:
         """把页面原文留在 runtime/debug/ 下：签到页改版或出现答题式验证时，能直接看 HTML。"""

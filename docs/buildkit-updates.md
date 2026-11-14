@@ -19,6 +19,14 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.15.1
+
+- 站点签到新增 `method="quiz"`：北洋园PT（tjupt.org）这类「给一张影片封面 + 6 个片名选项」的答题式签到。
+- 题库 `runtime/data/site_checkin_quiz.json` 存「封面 md5 → 正确片名」；命中就选同名单选按钮并 POST，未命中只换题、绝不猜（答错会被扣魔力），换满 8 次仍没有就记「题库里没有当前封面」。
+- 题库来源：同一封面反复出现、选项随机，取多次选项集合的交集反推答案；累计 440 道题 / 48 张封面，45 张已唯一确定。
+- `site_checkin.py` 新增 `load_quiz_table / _quiz_options / _quiz_pick / _sign_via_quiz`，`sign_site(..., quiz_table=...)` 新参数，模块自动取状态文件同目录的题库；面板「方式」下拉加「答题（看图选片名）」。
+- 测试 +4（题库读取容错、选项解析与挑名、命中提交、未知封面不提交），全套 389 passed。
+
 ## 2026.11.12.4
 
 - 签到失败/补发会主动通知（Bot API 直发私聊，走「接收 bot」，不需要用户会话）：失败首次发一条「⚠️ 签到失败：任务 / 目标 / 原因 / 会自动重试」，重试成功后发「✅ 签到已补发成功（此前失败 N 次）」，放弃时发「❌ 签到放弃，需手动补」；同一任务同一类提醒每天只发一次（`state.attempts[key].notified`）。

@@ -380,8 +380,21 @@ class SiteCheckinModule:
             timeout=self.config.timeout_seconds,
             flaresolverr=self.config.flaresolverr,
         )
+        self._save_debug(site, result)
         # 结果统一由 _record 写一条到全局日志，这里不再重复打一遍
         return result
+
+    def _save_debug(self, site: SiteCheckinSiteConfig, result: SignResult) -> None:
+        """把页面原文留在 runtime/debug/ 下：签到页改版或出现答题式验证时，能直接看 HTML。"""
+        html = getattr(result, "debug_html", "") or ""
+        if not html:
+            return
+        try:
+            target = Path(self.config.state_store).parent.parent / "debug"
+            target.mkdir(parents=True, exist_ok=True)
+            (target / f"site_checkin_{site.id}.html").write_text(html[:800_000], encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("站点签到 debug 页面落盘失败：%s", exc)
 
     # ------------------------------------------------------------------ 通知
     def _notify_text(self, site: SiteCheckinSiteConfig, result: SignResult) -> str:

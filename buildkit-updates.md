@@ -19,6 +19,13 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.14.1
+
+- 新增站点：北洋园PT（tjupt.org，NexusPHP）——`attendance.php` 认 `access_token` 这个 JWT cookie，
+  单独一条就够；已按 `1 0 * * *` 排程（该站 0/6/7/8/12/18/20/22 点签到前 10 名魔力翻倍）。
+- `page_text()` 先做 HTML 实体解码（`&nbsp;` 之类不再原样进日志），再去空白。
+- `_snippet()` 改成在所有命中里取最长的一段：原来固定取第一次命中，遇到导航里的
+  `[今日已签到]` 就只剩「已签到」两个字，正文那句「已累计签到 806 次…」被丢掉。
 ## 2026.11.13.2
 
 - 站点签到：`method=browser` 的 TRAWL 调用超时不再判失败——Turnstile 首轮解题常在 80s 以上，

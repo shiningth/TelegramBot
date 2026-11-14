@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import html as html_lib
 import re
 import time
 from dataclasses import dataclass
@@ -113,6 +114,8 @@ def page_text(html: str) -> str:
     body = re.sub(r"<script[\s\S]*?</script>", " ", html or "")
     body = re.sub(r"<style[\s\S]*?</style>", " ", body)
     body = re.sub(r"<[^>]+>", " ", body)
+    body = html_lib.unescape(body)
+    body = body.replace("\xa0", " ")
     return re.sub(r"\s+", " ", body).strip()
 
 
@@ -125,7 +128,17 @@ def _snippet(text: str, word: str, width: int = 48) -> str:
     index = text.find(word) if word else -1
     if index < 0:
         return word
-    return text[index : index + width].strip()
+    best = ""
+    for match in re.finditer(re.escape(word), text):
+        tail = text[match.start() : match.start() + width]
+        for stop in ("当前时间", "。", "！", "!", "|"):
+            pos = tail.find(stop)
+            if 0 < pos:
+                tail = tail[:pos]
+        tail = tail.strip(" []|·-")
+        if len(tail) > len(best):
+            best = tail
+    return best or word
 
 
 _EVENT_DATE_RE = re.compile(r"""["']start["']\s*:\s*["'](\d{4}-\d{2}-\d{2})["']""")

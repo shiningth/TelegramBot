@@ -19,6 +19,14 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.15.2
+
+- 修正 pt.0ff.cc（Farmm）签到方式：该站打开 `attendance.php` 即完成当日签到，之前把它配成 `attendanceRetroactive`（补签接口）会消耗补签卡 → 改为 `method="get"`，并清空 sign_url / post_data。
+- 硬拦截：`sign_site` 发现 `post_data` 里出现 `attendanceRetroactive` 时直接判失败并说明「补签接口已跳过，避免消耗补签卡」，不再提交。
+- 滑块在 `method="get"` 下也会解（原来只有 auto/slider 会解，导致 get 模式报「页面没有找到签到入口」）。
+- 日志 detail 更清楚：`今日已签（第 1211 次 · 日历已标记今日）`。
+- 测试 +2（get 模式先过滑块再判结果、补签接口被拒），全套 391 passed。
+
 ## 2026.11.15.1
 
 - 站点签到新增 `method="quiz"`：北洋园PT（tjupt.org）这类「给一张影片封面 + 6 个片名选项」的答题式签到。

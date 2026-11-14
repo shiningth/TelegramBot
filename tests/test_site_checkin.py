@@ -409,3 +409,61 @@ def test_quiz_method_skips_unknown_poster_without_guessing(tmp_path, monkeypatch
     assert result.state == "unknown"
     assert "题库" in result.detail
     assert posts == []
+
+def test_get_method_passes_slider_then_reads_signed_page(monkeypatch):
+    slider = "<html><body><div id='dragContainer'></div><script src='/slide_check_ab.js'></script></body></html>"
+    signed = "<html><body><h2>签到成功</h2>这是您的第 1211 次签到，本次签到获得 1000 个魔力值。</body></html>"
+    calls = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            calls["n"] += 1
+            return _Resp(slider if calls["n"] == 1 else signed)
+
+        def post(self, url, data=None, headers=None):  # pragma: no cover
+            raise AssertionError("method=get 不应提交表单")
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    monkeypatch.setattr(sitecheckin, "_solve_slider", lambda *a, **k: "")
+    result = sign_site(url="https://pt.0ff.cc/attendance.php", cookie="a=b", method="get")
+    assert result.state == "signed"
+    assert calls["n"] == 2
+
+def test_retroactive_post_is_refused_to_save_cards(monkeypatch):
+    page = "<html><body><form method='post' action='attendance.php'><input type='hidden' name='x' value='1'></form></body></html>"
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            return _Resp(page)
+
+        def post(self, url, data=None, headers=None):  # pragma: no cover
+            raise AssertionError("不应调用补签接口")
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    result = sign_site(
+        url="https://pt.0ff.cc/attendance.php",
+        cookie="a=b",
+        method="post",
+        sign_url="https://pt.0ff.cc/ajax.php",
+        post_data="action=attendanceRetroactive&params[date]={date}",
+    )
+    assert result.state == "failed"
+    assert "补签卡" in result.detail

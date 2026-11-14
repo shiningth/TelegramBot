@@ -689,7 +689,7 @@ def sign_site(
                 result.detail = "需要 Cloudflare Turnstile 验证（脚本过不去，需要浏览器）"
                 return _finish(result, started)
 
-            if state == "slider" and method in ("auto", "slider"):
+            if state == "slider" and method in ("auto", "slider", "get"):
                 problem = _solve_slider(client, html, url)
                 if problem:
                     result.detail = f"滑动认证未通过：{problem}"
@@ -715,6 +715,11 @@ def sign_site(
                     return _finish(result, started)
 
             if method != "get" and (_looks_like_sign_form(html) or sign_url):
+                if "attendanceretroactive" in (post_data or "").lower():
+                    # 补签接口会消耗补签卡，只该用于漏签的日期；今日签到不能走这里
+                    result.state = "failed"
+                    result.detail = "配置里的签到动作是补签接口（attendanceRetroactive），已跳过，避免消耗补签卡"
+                    return _finish(result, started)
                 parsed = _form_fields(html)
                 action = sign_url or (urljoin(url, parsed[0]) if parsed and parsed[0] else url)
                 form_method = (parsed[1] if parsed else "post").upper()

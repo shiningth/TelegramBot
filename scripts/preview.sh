@@ -1,5 +1,6 @@
 #!/bin/sh
-# 鏈湴棰勮瀹瑰櫒锛氬悓涓€涓暅鍍忓簳搴?+ 婧愮爜鎸傝浇锛屾ā鍧楀叏鍏筹紝鍙敤鏉ュ湪 18088 鐪嬬晫闈€?# 鐢ㄦ硶锛歴cripts/preview.sh start|stop|status|logs
+# 本地预览容器：同一个镜像底座 + 源码挂载，模块全关，只看界面。
+# 用法：scripts/preview.sh start|stop|status|logs
 set -eu
 
 NAME=tgbot-dev
@@ -44,7 +45,7 @@ case "${1:-status}" in
     fi
     ;;
   *)
-    echo "usage: $0 start|stop|status|logs" >&2
+    echo "usage: scripts/preview.sh start|stop|status|logs" >&2
     exit 2
     ;;
 esac

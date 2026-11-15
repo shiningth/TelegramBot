@@ -467,3 +467,60 @@ def test_retroactive_post_is_refused_to_save_cards(monkeypatch):
     )
     assert result.state == "failed"
     assert "补签卡" in result.detail
+
+def test_get_retries_on_5xx_then_recovers(monkeypatch):
+    calls = {"n": 0}
+    page = "<html><body><h2>签到成功</h2>这是您的第 1212 次签到，本次签到获得 1000 个魔力值。</body></html>"
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return _Resp("<html>error</html>", status=500)
+            return _Resp(page)
+
+        def post(self, url, data=None, headers=None):  # pragma: no cover
+            raise AssertionError("不应提交")
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    monkeypatch.setattr(sitecheckin.time, "sleep", lambda *_: None)
+    result = sign_site(url="https://pt.0ff.cc/attendance.php", cookie="a=b", method="get")
+    assert result.state == "signed"
+    assert calls["n"] == 3
+
+
+def test_get_reports_5xx_after_retries(monkeypatch):
+    calls = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            calls["n"] += 1
+            return _Resp("<html>error</html>", status=500)
+
+        def post(self, url, data=None, headers=None):  # pragma: no cover
+            raise AssertionError("不应提交")
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    monkeypatch.setattr(sitecheckin.time, "sleep", lambda *_: None)
+    result = sign_site(url="https://pt.0ff.cc/attendance.php", cookie="a=b", method="get")
+    assert result.state == "failed"
+    assert "500" in result.detail and "重试" in result.detail
+    assert calls["n"] == 4

@@ -1,4 +1,4 @@
-"""网页签到通用实现：用 Cookie 直接请求站点签到页/接口。
+﻿"""网页签到通用实现：用 Cookie 直接请求站点签到页/接口。
 
 设计原则：
 1. 站点无关——所有差异都走配置（url / method / sign_url / headers / 关键字）。
@@ -573,6 +573,33 @@ def _sign_via_quiz(
     return _finish(result, started)
 
 
+def _get_with_retry(
+    client: httpx.Client, url: str, *, attempts: int = 4, delay: float = 10.0
+) -> httpx.Response:
+    """GET 一次，遇到 5xx 或连接错误就等一会儿重试。
+
+    PT 站每天 0 点重置签到，整点那一两分钟经常直接 500；
+    这种服务端抖动不该被记成「签到失败」。
+    """
+    last_error: Exception | None = None
+    resp: httpx.Response | None = None
+    for index in range(max(1, attempts)):
+        try:
+            resp = client.get(url)
+        except httpx.HTTPError as exc:  # 连接被重置、超时等
+            last_error = exc
+            resp = None
+        else:
+            if resp.status_code < 500:
+                return resp
+            last_error = None
+        if index < attempts - 1:
+            time.sleep(delay)
+    if resp is not None:
+        return resp
+    raise last_error or RuntimeError("请求失败")
+
+
 def sign_site(
     *,
     url: str,
@@ -636,7 +663,7 @@ def sign_site(
             timeout=timeout,
             follow_redirects=True,
         ) as client:
-            resp = client.get(url)
+            resp = _get_with_retry(client, url)
             html = resp.text or ""
             result.http = resp.status_code
             result.final_url = str(resp.url)
@@ -760,6 +787,10 @@ def sign_site(
                     result.detail = "提交后跳到登录页，Cookie 可能已失效"
                     return _finish(result, started)
 
+            if result.http >= 500:
+                result.state = "failed"
+                result.detail = f"站点返回 HTTP {result.http}（已重试 3 次，多为整点重置高峰）"
+                return _finish(result, started)
             result.detail = f"页面没有找到签到入口（HTTP {result.http}）"
             return _finish(result, started)
     except Exception as exc:  # noqa: BLE001

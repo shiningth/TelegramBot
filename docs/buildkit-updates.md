@@ -19,6 +19,12 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.16.1
+
+- 站点签到 GET 加自动重试：新增 `_get_with_retry()`，遇到 5xx 或连接错误隔 10 秒重试，最多 4 次；PT 站每天 0 点重置签到，00:01 那一分钟经常直接 500。重试后仍失败才记失败，detail 写明「站点返回 HTTP 500（已重试 3 次，多为整点重置高峰）」。
+- 背景：11-16 00:01 pt.0ff.cc 返回 HTTP 500 被判失败，00:47 手动重跑即签到成功（第 1212 次）。
+- 测试 +2（5xx 后恢复、重试用尽报错），全套 393 passed。
+
 ## 2026.11.15.2
 
 - 修正 pt.0ff.cc（Farmm）签到方式：该站打开 `attendance.php` 即完成当日签到，之前把它配成 `attendanceRetroactive`（补签接口）会消耗补签卡 → 改为 `method="get"`，并清空 sign_url / post_data。

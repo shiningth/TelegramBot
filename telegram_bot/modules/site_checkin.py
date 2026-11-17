@@ -30,6 +30,8 @@ from .checkin import cron_matches
 logger = logging.getLogger(__name__)
 
 _LOG_LIMIT = 400
+# 这些状态说明「今天还没签上」，当天可以再试
+_RETRY_STATES = ("failed", "pending", "unknown", "captcha", "timeout")
 # 与前端 SITE_STATE_LABELS 保持一致，写全局日志时用中文
 STATE_LABELS = {
     "signed": "签到成功",
@@ -66,11 +68,22 @@ def _daily_cron_time(expression: str) -> tuple[int, int] | None:
     return hour_i, minute_i
 
 
-def is_due(site: SiteCheckinSiteConfig, now: datetime, last_run: datetime | None) -> bool:
+def is_due(
+    site: SiteCheckinSiteConfig,
+    now: datetime,
+    last_run: datetime | None,
+    *,
+    last_state: str = "",
+    attempts_today: int = 0,
+    retry_minutes: int = 0,
+    max_attempts: int = 3,
+) -> bool:
     """判断这个站点现在该不该跑。
 
     每天固定时刻的写法用「到点之后第一次轮询就跑」，避免轮询间隔正好错过那一分钟；
     复杂 cron 仍按分钟精确匹配。
+    另外：当天已经跑过但结果是失败类状态时，隔 `retry_minutes` 分钟再试，
+    当天最多 `max_attempts` 次（PT 站 0 点重置时常返回 500，等一会儿就好）。
     """
     fixed = _daily_cron_time(site.cron)
     if fixed is None:
@@ -80,7 +93,16 @@ def is_due(site: SiteCheckinSiteConfig, now: datetime, last_run: datetime | None
         return False
     if last_run is None:
         return True
-    return last_run.date() < now.date()
+    if last_run.date() < now.date():
+        return True
+    if (
+        retry_minutes > 0
+        and last_state in _RETRY_STATES
+        and attempts_today < max_attempts
+        and (now - last_run) >= timedelta(minutes=retry_minutes)
+    ):
+        return True
+    return False
 
 
 class SiteCheckinModule:
@@ -320,6 +342,17 @@ class SiteCheckinModule:
             except asyncio.TimeoutError:
                 continue
 
+    def _attempts_today(self, site_id: str, now: datetime) -> int:
+        """今天这个站点已经跑过几次（看日志时间戳）。"""
+        day = now.date().isoformat()
+        count = 0
+        for entry in self._state.get("logs") or []:
+            if entry.get("site") != site_id:
+                continue
+            if str(entry.get("at") or "")[:10] == day:
+                count += 1
+        return count
+
     async def _tick(self) -> None:
         if not self.config.enabled:
             return
@@ -334,7 +367,15 @@ class SiteCheckinModule:
                     last_run = datetime.fromisoformat(str(last_entry["at"]))
                 except Exception:  # noqa: BLE001
                     last_run = None
-            if not is_due(site, now, last_run):
+            if not is_due(
+                site,
+                now,
+                last_run,
+                last_state=str(last_entry.get("state") or ""),
+                attempts_today=self._attempts_today(site.id, now),
+                retry_minutes=int(getattr(self.config, "retry_failed_minutes", 0) or 0),
+                max_attempts=int(getattr(self.config, "max_attempts_per_day", 3) or 3),
+            ):
                 continue
             result = await self._run(site)
             result = self._refine_already(site, result)

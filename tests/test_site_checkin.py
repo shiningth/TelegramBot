@@ -522,5 +522,15 @@ def test_get_reports_5xx_after_retries(monkeypatch):
     monkeypatch.setattr(sitecheckin.time, "sleep", lambda *_: None)
     result = sign_site(url="https://pt.0ff.cc/attendance.php", cookie="a=b", method="get")
     assert result.state == "failed"
-    assert "500" in result.detail and "重试" in result.detail
+    assert "500" in result.detail and "稍后会自动再试" in result.detail
     assert calls["n"] == 4
+
+def test_is_due_retries_failed_site_same_day(monkeypatch):
+    site = SiteCheckinSiteConfig(id="x", name="X", url="https://x/", cron="1 0 * * *")
+    now = datetime(2026, 11, 17, 9, 30)
+    last = datetime(2026, 11, 17, 0, 1)
+    assert is_due(site, now, last, last_state="signed") is False
+    assert is_due(site, now, last, last_state="failed", attempts_today=1, retry_minutes=20) is True
+    assert is_due(site, now, last, last_state="failed", attempts_today=3, retry_minutes=20) is False
+    soon = datetime(2026, 11, 17, 0, 5)
+    assert is_due(site, soon, last, last_state="failed", attempts_today=1, retry_minutes=20) is False

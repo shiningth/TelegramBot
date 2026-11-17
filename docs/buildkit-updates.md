@@ -19,6 +19,13 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.17.1
+
+- 修复「0 点整签到失败后再也不重试」：滑块通过后的第二次请求原先直接 `client.get()`，绕过了 `_get_with_retry()`，于是 00:01 的 500 一次性判死（实测 2843ms 就失败，detail 却写「已重试 3 次」。现在该处也走重试，文案改为「站点返回 HTTP 500（0 点重置高峰常出现，稍后会自动再试）」，`_get_with_retry()` 默认 4 次 / 10 秒。
+- 新增当天补试：`is_due()` 增加 `last_state/attempts_today/retry_minutes/max_attempts`，站点当天跑过但状态属 `failed/pending/unknown/captcha/timeout` 时，距上次满 20 分钟且当天次数 < 3 会再跑一次；`SiteCheckinConfig` 新增 `retry_failed_minutes=20`、`max_attempts_per_day=3`，`state.logs` 按站点+日期计数。
+- 实测：11-17 重启后 09:43 自动补签到成功（pt.0ff.cc 第 1213 次、连续 1196 天、+1000 魔力）。
+- 测试：新增 `test_is_due_retries_failed_site_same_day`，`test_get_reports_5xx_after_retries` 断言随文案调整，全套 394 passed。
+
 ## 2026.11.16.1
 
 - 站点签到 GET 加自动重试：新增 `_get_with_retry()`，遇到 5xx 或连接错误隔 10 秒重试，最多 4 次；PT 站每天 0 点重置签到，00:01 那一分钟经常直接 500。重试后仍失败才记失败，detail 写明「站点返回 HTTP 500（已重试 3 次，多为整点重置高峰）」。

@@ -1,4 +1,4 @@
-﻿"""网页签到通用实现：用 Cookie 直接请求站点签到页/接口。
+"""网页签到通用实现：用 Cookie 直接请求站点签到页/接口。
 
 设计原则：
 1. 站点无关——所有差异都走配置（url / method / sign_url / headers / 关键字）。
@@ -721,7 +721,7 @@ def sign_site(
                 if problem:
                     result.detail = f"滑动认证未通过：{problem}"
                     return _finish(result, started)
-                resp = client.get(url)
+                resp = _get_with_retry(client, url)
                 html = resp.text or ""
                 state, why = classify(
                     html,
@@ -789,7 +789,9 @@ def sign_site(
 
             if result.http >= 500:
                 result.state = "failed"
-                result.detail = f"站点返回 HTTP {result.http}（已重试 3 次，多为整点重置高峰）"
+                result.detail = (
+                    f"站点返回 HTTP {result.http}（0 点重置高峰常出现，稍后会自动再试）"
+                )
                 return _finish(result, started)
             result.detail = f"页面没有找到签到入口（HTTP {result.http}）"
             return _finish(result, started)

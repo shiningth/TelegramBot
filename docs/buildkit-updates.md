@@ -19,6 +19,14 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.18.1
+
+- 0ff 在 11-18 00:01 报「滑动认证未通过：滑块脚本里没有找到验证地址」：0 点重置高峰时站点返回的 slide_check 脚本里没有 set_access_token 地址，属服务端抖动。
+- `sitecheckin._solve_slider` 改为最多 3 次重试，每次重新取签到页（滑块脚本名与 token 每次都会变），并绕过缓存。
+- 滑块彻底解不开且配了 FlareSolverr/TRAWL 时，自动降级到 `_sign_via_browser` 真浏览器兜底，不再直接判失败。
+- `site_checkin._RETRY_STATES` 增加 `slider`：滑块失败也纳入当天补试（20 分钟后再试，当天最多 3 次），此前只有 failed/pending/unknown/captcha/timeout 会补试，滑块失败整天不重试。
+- 新增 3 个单测（滑块脚本无 token 时重试成功、滑块失败回落浏览器、is_due 认可 slider 状态），全套 396 passed。
+
 ## 2026.11.17.1
 
 - 修复「0 点整签到失败后再也不重试」：滑块通过后的第二次请求原先直接 `client.get()`，绕过了 `_get_with_retry()`，于是 00:01 的 500 一次性判死（实测 2843ms 就失败，detail 却写「已重试 3 次」。现在该处也走重试，文案改为「站点返回 HTTP 500（0 点重置高峰常出现，稍后会自动再试）」，`_get_with_retry()` 默认 4 次 / 10 秒。

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _LOG_LIMIT = 400
 # 这些状态说明「今天还没签上」，当天可以再试
-_RETRY_STATES = ("failed", "pending", "unknown", "captcha", "timeout")
+_RETRY_STATES = ("failed", "pending", "unknown", "captcha", "timeout", "slider")
 # 与前端 SITE_STATE_LABELS 保持一致，写全局日志时用中文
 STATE_LABELS = {
     "signed": "签到成功",

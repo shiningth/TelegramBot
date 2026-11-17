@@ -534,3 +534,65 @@ def test_is_due_retries_failed_site_same_day(monkeypatch):
     assert is_due(site, now, last, last_state="failed", attempts_today=3, retry_minutes=20) is False
     soon = datetime(2026, 11, 17, 0, 5)
     assert is_due(site, soon, last, last_state="failed", attempts_today=1, retry_minutes=20) is False
+    # 滑块没过也要当天补试，否则 0 点那一刻的抖动会白白丢掉一整天
+    assert is_due(site, now, last, last_state="slider", attempts_today=1, retry_minutes=20) is True
+
+
+def test_solve_slider_retries_when_js_has_no_token(monkeypatch):
+    page = '<script src="/slide_check_ab.js"></script>'
+    js_without = "var x = 1;"
+    js_with = 'const requestUrl = "https://pt.0ff.cc/set_access_token-aa-bb-YWNs-";'
+    state = {"js": 0, "token": 0, "pages": 0}
+
+    class FakeClient:
+        def get(self, url, **kwargs):
+            if "slide_check" in url:
+                state["js"] += 1
+                return _Resp(js_without if state["js"] == 1 else js_with)
+            if "set_access_token" in url:
+                state["token"] += 1
+                return _Resp("")
+            state["pages"] += 1
+            return _Resp(page)
+
+    monkeypatch.setattr(sitecheckin.time, "sleep", lambda *_: None)
+    problem = sitecheckin._solve_slider(FakeClient(), page, "https://pt.0ff.cc/attendance.php")
+    assert problem == ""
+    assert state["js"] == 2 and state["token"] == 1
+
+
+def test_slider_failure_falls_back_to_browser(monkeypatch):
+    page = "<html><body><div id='dragContainer'></div></body></html>"
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            return _Resp(page)
+
+        def post(self, url, data=None, headers=None):  # pragma: no cover
+            raise AssertionError("should not post")
+
+    def fake_browser(result, started, **kwargs):
+        result.state = "already"
+        result.detail = "今日已签（浏览器兜底）"
+        return result
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    monkeypatch.setattr(sitecheckin, "_solve_slider", lambda *a, **k: "滑块脚本里没有找到验证地址")
+    monkeypatch.setattr(sitecheckin, "_sign_via_browser", fake_browser)
+    result = sign_site(
+        url="https://pt.0ff.cc/attendance.php",
+        cookie="a=b",
+        method="get",
+        flaresolverr="http://192.168.50.105:8193",
+    )
+    assert result.state == "already"
+    assert "浏览器兜底" in result.detail

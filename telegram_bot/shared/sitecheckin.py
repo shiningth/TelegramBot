@@ -248,28 +248,57 @@ def _cf_blocked(resp: httpx.Response) -> bool:
     return any(marker in head for marker in _CF_MARKERS)
 
 
-def _solve_slider(client: httpx.Client, html: str, base_url: str) -> str:
+def _solve_slider(
+    client: httpx.Client, html: str, base_url: str, *, attempts: int = 3
+) -> str:
     """NexusPHP 系滑动认证：取 slide_check JS 里的 set_access_token 地址并请求。
 
     这一步能让「必须拖到底」的验证在服务端通过；站点若把 token 绑在
     真实浏览器会话上，这里会失败并如实返回，交给浏览器兜底。
+
+    0 点重置高峰时站点偶尔会返回没有 token 的旧脚本，所以这里重试几次并
+    每次都重新取签到页（滑块脚本名与 token 每次请求都会变）。
     """
-    match = _SLIDER_JS_RE.search(html or "")
-    if not match:
+    last = ""
+    for index in range(max(1, attempts)):
+        page = html if index == 0 else ""
+        if not page:
+            try:
+                page = client.get(base_url).text
+            except Exception as exc:  # noqa: BLE001
+                last = f"取签到页失败：{type(exc).__name__}"
+                time.sleep(1.0)
+                continue
+        match = _SLIDER_JS_RE.search(page or "")
+        if not match:
+            last = "页面上没有滑块脚本"
+            time.sleep(1.0)
+            continue
+        js_url = urljoin(base_url, match.group(1))
+        try:
+            js = client.get(
+                js_url, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"}
+            ).text
+        except Exception as exc:  # noqa: BLE001
+            last = f"取滑块脚本失败：{type(exc).__name__}"
+            time.sleep(1.0)
+            continue
+        token = _TOKEN_URL_RE.search(js or "")
+        if not token:
+            last = "滑块脚本里没有找到验证地址"
+            time.sleep(1.0)
+            continue
+        try:
+            client.get(
+                token.group(0),
+                headers={"X-Requested-With": "XMLHttpRequest", "Accept": "*/*"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            last = f"提交滑块验证失败：{type(exc).__name__}"
+            time.sleep(1.0)
+            continue
         return ""
-    js_url = urljoin(base_url, match.group(1))
-    try:
-        js = client.get(js_url).text
-    except Exception as exc:  # noqa: BLE001
-        return f"取滑块脚本失败：{type(exc).__name__}"
-    token = _TOKEN_URL_RE.search(js or "")
-    if not token:
-        return "滑块脚本里没有找到验证地址"
-    try:
-        client.get(token.group(0), headers={"X-Requested-With": "XMLHttpRequest", "Accept": "*/*"})
-    except Exception as exc:  # noqa: BLE001
-        return f"提交滑块验证失败：{type(exc).__name__}"
-    return ""
+    return last
 
 
 def _fetch_via_flaresolverr(url: str, endpoint: str, timeout: int) -> str:
@@ -718,6 +747,19 @@ def sign_site(
 
             if state == "slider" and method in ("auto", "slider", "get"):
                 problem = _solve_slider(client, html, url)
+                if problem and flaresolverr:
+                    # 脚本过不了滑块就交给真浏览器（TRAWL）兜底，别直接判失败
+                    return _sign_via_browser(
+                        result,
+                        started,
+                        url=url,
+                        cookie=cookie,
+                        endpoint=flaresolverr,
+                        timeout=timeout,
+                        success_keywords=success_keywords,
+                        already_keywords=already_keywords,
+                        today=today,
+                    )
                 if problem:
                     result.detail = f"滑动认证未通过：{problem}"
                     return _finish(result, started)

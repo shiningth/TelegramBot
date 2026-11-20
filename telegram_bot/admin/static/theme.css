@@ -1074,10 +1074,13 @@ pre.log {
 }
 
 
-/* Rail shares the page background so the column has no seam on scroll. */
+/* Rail 用半透明磨砂玻璃，滚动内容能从底下透出来 */
 .sidebar {
-  background: var(--paper) !important;
+  background: rgba(255, 255, 255, 0.62) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  backdrop-filter: blur(18px) saturate(1.5);
   border-right: 1px solid var(--hair) !important;
+  box-shadow: 0 10px 30px rgba(20, 24, 28, 0.05);
 }
 
 .topbar {
@@ -1396,7 +1399,7 @@ label.secret-field,
   .section-split { margin: 18px 0 12px !important; padding-top: 14px !important; }
   .stat-grid, .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 
-  /* 底部导航：居中、收窄、压扁 */
+  /* 底部导航：居中、收窄、压扁、半透明磨砂 */
   .sidebar {
     left: 50% !important;
     right: auto !important;
@@ -1404,6 +1407,11 @@ label.secret-field,
     width: min(92vw, 372px) !important;
     padding: 4px 6px !important;
     border-radius: 22px !important;
+    border: 1px solid rgba(255, 255, 255, 0.55) !important;
+    background: rgba(255, 255, 255, 0.62) !important;
+    -webkit-backdrop-filter: blur(22px) saturate(1.7);
+    backdrop-filter: blur(22px) saturate(1.7);
+    box-shadow: 0 14px 34px rgba(18, 34, 38, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.75);
   }
   .side-nav { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; gap: 2px !important; }
   .nav-item {

@@ -68,6 +68,7 @@ class SignResult:
     debug_html: str = ""
     page_text: str = ""
     dates: tuple[str, ...] = ()
+    bonus: str = ""
 
     @property
     def ok(self) -> bool:
@@ -844,7 +845,42 @@ def sign_site(
 
 def _finish(result: SignResult, started: float) -> SignResult:
     result.elapsed_ms = int((time.monotonic() - started) * 1000)
+    _decorate(result)
     return result
+
+
+_BONUS_RE = re.compile(
+    r"签到已得\s*([\d,]+(?:\.\d+)?)"
+    r"|本次签到获得\s*([\d,]+(?:\.\d+)?)\s*个?\s*魔力"
+    r"|获得\s*([\d,]+(?:\.\d+)?)\s*个\s*魔力"
+)
+
+
+def _bonus_amount(html: str) -> str:
+    """从页面里抠出「今天签到得了多少魔力」（不同站点写法不同）。"""
+    match = _BONUS_RE.search(page_text(html) or "")
+    if not match:
+        match = _BONUS_RE.search(html or "")
+    if not match:
+        return ""
+    for group in match.groups():
+        if group:
+            return group
+    return ""
+
+
+def _decorate(result: SignResult) -> None:
+    """把「获得 N 个魔力值」补进说明里；already 时替掉「请勿重复刷新」那种二次签到文案。"""
+    bonus = _bonus_amount(result.debug_html or result.page_text or "")
+    if not bonus:
+        return
+    result.bonus = bonus
+    detail = (result.detail or "").strip()
+    if result.state == "already":
+        result.detail = f"今日已签到 · 本次获得 {bonus} 个魔力值"
+    elif result.state == "signed":
+        if "魔力" not in detail:
+            result.detail = (detail or "签到成功").rstrip("。，") + f"，获得 {bonus} 个魔力值"
 
 
 def result_json(result: SignResult) -> str:
@@ -855,6 +891,7 @@ def result_json(result: SignResult) -> str:
             "http": result.http,
             "elapsed_ms": result.elapsed_ms,
             "final_url": result.final_url,
+            "bonus": result.bonus,
         },
         ensure_ascii=False,
     )
@@ -868,4 +905,5 @@ def as_dict(result: SignResult) -> dict[str, Any]:
         "elapsed_ms": result.elapsed_ms,
         "final_url": result.final_url,
         "page_text": result.page_text,
+        "bonus": result.bonus,
     }

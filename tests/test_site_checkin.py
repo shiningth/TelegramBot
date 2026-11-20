@@ -596,3 +596,56 @@ def test_slider_failure_falls_back_to_browser(monkeypatch):
     )
     assert result.state == "already"
     assert "浏览器兜底" in result.detail
+
+
+def test_bonus_amount_reads_bonus_header():
+    html = '<span class="color_bonus">魔力值 </span>[<a href="mybonus.php">使用</a>]: 626,858.3 &nbsp;(签到已得105)'
+    assert sitecheckin._bonus_amount(html) == "105"
+
+
+def test_already_detail_shows_bonus_instead_of_repeat_hint():
+    html = "<div>(签到已得105)</div><div>您今天已经签到过了，请勿重复刷新。</div>"
+    result = SignResult(state="already", detail="您今天已经签到过了，请勿重复刷新。", debug_html=html)
+    sitecheckin._finish(result, __import__("time").monotonic())
+    assert result.bonus == "105"
+    assert "105" in result.detail
+    assert "请勿重复" not in result.detail
+
+
+def test_signed_detail_appends_bonus():
+    html = "<div>签到成功，获得 100 个魔力值</div>"
+    result = SignResult(state="signed", detail="签到成功", debug_html=html)
+    sitecheckin._finish(result, __import__("time").monotonic())
+    assert result.bonus == "100"
+    assert "100" in result.detail
+
+
+def test_record_counts_consecutive_days(tmp_path):
+    from datetime import timedelta
+
+    module = make_module(tmp_path)
+    today = datetime.now().date()
+    module._state["logs"] = [
+        {"at": (today - timedelta(days=1)).isoformat() + "T08:00:00", "site": "ourbits", "state": "signed"},
+        {"at": (today - timedelta(days=2)).isoformat() + "T08:00:00", "site": "ourbits", "state": "already"},
+    ]
+    site = module.config.sites[0]
+    result = SignResult(state="signed", detail="签到成功 · 获得 100 个魔力值", bonus="100")
+    entry = module._record(site, result)
+    assert entry["streak"] == 3
+    assert "连续 3 天" in entry["detail"]
+
+
+def test_first_already_of_day_is_shown_as_success(tmp_path):
+    module = make_module(tmp_path)
+    site = module.config.sites[0]
+    first = module._record(
+        site, SignResult(state="already", detail="今日已签到 · 本次获得 105 个魔力值", bonus="105")
+    )
+    assert first["detail"].startswith("签到成功")
+    assert "105" in first["detail"]
+    second = module._record(
+        site, SignResult(state="already", detail="今日已签到 · 本次获得 105 个魔力值", bonus="105")
+    )
+    assert second["detail"].startswith("今日已签到")
+

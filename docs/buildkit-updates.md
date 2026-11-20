@@ -19,6 +19,15 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.20.3
+
+- 站点签到详情更好读：结果里带上「本次获得 N 个魔力值」「连续 N 天」。
+  - OurBits 不再显示「您今天已经签到过了，请勿重复刷新」这种二次签到文案，改为「今日已签到 · 本次获得 105 个魔力值（连续 9 天）」。
+  - 当天第一次跑出 already（说明这一轮刚签上）时展示为「签到成功…」，内部状态仍记 already，不影响当天补试/去重逻辑。
+- 实现：`SignResult.bonus` 新字段；`_bonus_amount()` 支持 `(签到已得N)`、`本次签到获得 N 个魔力值`、`获得 N 个魔力值` 三种写法；模块 `_record()` 按日志算连续天数并写进 detail/entry。
+- 顺手修正今天 OurBits 那条历史记录文本。
+- 新增 4 个用例（bonus 解析、already 展示、signed 追加、连续天数、当天首条判成功）。
+
 ## 2026.11.20.2
 
 - 移动端（≤920px）修复与优化：桌面端 `.shell{margin-left:248px}` 在窄屏未归零，把内容挤成 64px 一条 —— 已在 `theme.css` 移动端媒体查询里覆盖为 0；表单/卡片/字段全部单列，卡片头部与站点信息不再撑破屏幕（`min-width:0` + `site-last` 允许换行）。

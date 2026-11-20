@@ -15,7 +15,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -299,18 +299,57 @@ class SiteCheckinModule:
             result.detail = f"今日已签（第 {count} 次{tail}）"
         return result
 
+    def _streak(self, site_id: str, today: str) -> int:
+        """按签到记录算连续天数（含今天）。站点页面不提供连续天数时用它补一句。"""
+        days = {today}
+        for item in self._state.get("logs") or []:
+            if item.get("site") != site_id:
+                continue
+            if item.get("state") not in ("signed", "already"):
+                continue
+            day = str(item.get("at") or "")[:10]
+            if day:
+                days.add(day)
+        count = 0
+        cursor = date.fromisoformat(today)
+        while cursor.isoformat() in days:
+            count += 1
+            cursor = cursor - timedelta(days=1)
+        return count
+
     def _record(self, site: SiteCheckinSiteConfig, result: SignResult) -> dict[str, Any]:
         now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        detail = result.detail or ""
+        streak = 0
+        if result.state in ("signed", "already"):
+            today_done_before = any(
+                item.get("site") == site.id
+                and item.get("state") in ("signed", "already")
+                and str(item.get("at") or "")[:10] == today
+                for item in (self._state.get("logs") or [])
+            )
+            if result.state == "already" and not today_done_before and detail.startswith("今日已签到"):
+                # 今天第一条就是已签：多半是我们这一轮刚签上的，按签到成功展示
+                detail = "签到成功" + detail[len("今日已签到"):]
+            streak = self._streak(site.id, today)
+            if streak >= 2 and "连续" not in detail:
+                if detail.endswith("）"):
+                    detail = detail[:-1] + f" · 连续 {streak} 天）"
+                else:
+                    detail = detail.rstrip("。，") + f"（连续 {streak} 天）"
         entry = {
             "at": now.strftime("%Y-%m-%dT%H:%M:%S"),
             "time": now.strftime("%m-%d %H:%M"),
             "site": site.id,
             "name": site.name or site.id,
             "state": result.state,
-            "detail": result.detail[:64],  # 日志只留一句，完整页面另存 debug_html
+            "detail": detail[:80],  # 日志只留一句，完整页面另存 debug_html
             "http": result.http,
             "ms": result.elapsed_ms,
             "count": _sign_count(result.detail),
+            "bonus": result.bonus,
+            "streak": streak,
         }
         self._state.setdefault("logs", []).insert(0, entry)
         self._state["logs"] = self._state["logs"][:_LOG_LIMIT]
@@ -322,7 +361,7 @@ class SiteCheckinModule:
             entry["name"],
             STATE_LABELS.get(result.state, result.state),
             result.elapsed_ms,
-            result.detail or "-",
+            detail or "-",
         )
         return entry
 
@@ -379,7 +418,8 @@ class SiteCheckinModule:
                 continue
             result = await self._run(site)
             result = self._refine_already(site, result)
-            self._record(site, result)
+            entry = self._record(site, result)
+            result.detail = entry.get("detail") or result.detail
             await self._notify(site, result)
             self._sync_card()
 
@@ -391,6 +431,7 @@ class SiteCheckinModule:
         result = await self._run(site)
         result = self._refine_already(site, result)
         entry = self._record(site, result)
+        result.detail = entry.get("detail") or result.detail
         self._sync_card()
         return {
             "ok": True,

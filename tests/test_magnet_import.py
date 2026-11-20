@@ -139,7 +139,11 @@ def test_imports_csv_replies_and_cleans_up(tmp_path: Path) -> None:
     assert call["content"] == CONTENT
     assert call["password"] == "secret"
     assert call["update_existing"] is False and call["skip_duplicates"] is True
-    assert client.sent == [{"chat_id": CHAT_ID, "text": "已自动导入，谢谢老大", "reply_to": 7}]
+    assert len(client.sent) == 1
+    reply = client.sent[0]
+    assert reply["chat_id"] == CHAT_ID and reply["reply_to"] == 7
+    assert reply["text"].startswith("✅ 已自动导入")
+    assert "校对：共" in reply["text"] and "导入：新增" in reply["text"]
     assert list((tmp_path / "runtime/tmp/magnet_import").iterdir()) == []
     state = json.loads((tmp_path / "runtime/data/magnet_import_state.json").read_text(encoding="utf-8"))
     assert state["processed"][f"{CHAT_ID}:7"]["status"] == "imported"

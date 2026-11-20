@@ -240,11 +240,15 @@ class MagnetImportConfig:
     api_password: str = ""
     update_existing: bool = False
     skip_duplicates: bool = True
-    reply_text: str = "已自动导入，谢谢老大"
+    reply_text: str = (
+        "✅ 已自动导入 {file}\n"
+        "校对：共 {total} 行，有效 {valid} 行，文件内重复 {dupes} 行，坏行 {invalid} 行\n"
+        "预检：库里已有 {existing} 条，未上传\n"
+        "导入：新增 {imported}，跳过 {skipped}，更新 {updated}，错误 {errors}"
+    )
     manual_success_text: str = (
         "✅ 已导入 {file}\n"
-        "校对：共 {total} 行，有效 {valid} 行，文件内重复 {dupes} 行，坏行 {invalid} 行；"
-        "magnet_hash 改为文件 MD4 {normalized} 行\n"
+        "校对：共 {total} 行，有效 {valid} 行，文件内重复 {dupes} 行，坏行 {invalid} 行\n"
         "预检：库里已有 {existing} 条，未上传\n"
         "导入：新增 {imported}，跳过 {skipped}，更新 {updated}，错误 {errors}"
     )
@@ -344,9 +348,6 @@ class SiteCheckinConfig:
     notify_bot_token: str = ""
     notify_chat_id: str = ""
     notify_text: str = "站点签到 · {name}\n{status}：{reason}\n时间：{time}"
-    # 当天失败后隔多少分钟再试，以及当天最多试几次（PT 站 0 点常返回 500）
-    retry_failed_minutes: int = 20
-    max_attempts_per_day: int = 3
     sites: list[SiteCheckinSiteConfig] = field(default_factory=list)
     state_store: str = "runtime/data/site_checkin_state.json"
 
@@ -1056,8 +1057,6 @@ def site_checkin_config_from_dict(data: Any) -> SiteCheckinConfig:
         poll_interval_seconds=_int("poll_interval_seconds", 10, 3600),
         timeout_seconds=_int("timeout_seconds", 10, 180),
         log_keep_days=_int("log_keep_days", 1, 365),
-        retry_failed_minutes=_int("retry_failed_minutes", 0, 1440),
-        max_attempts_per_day=_int("max_attempts_per_day", 1, 20),
         flaresolverr=str(data.get("flaresolverr") or "").strip(),
         notify_enabled=bool(data.get("notify_enabled", defaults.notify_enabled)),
         notify_bot_token=str(data.get("notify_bot_token") or "").strip(),

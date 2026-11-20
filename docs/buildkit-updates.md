@@ -19,6 +19,14 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.20.2
+
+- 移动端（≤920px）修复与优化：桌面端 `.shell{margin-left:248px}` 在窄屏未归零，把内容挤成 64px 一条 —— 已在 `theme.css` 移动端媒体查询里覆盖为 0；表单/卡片/字段全部单列，卡片头部与站点信息不再撑破屏幕（`min-width:0` + `site-last` 允许换行）。
+- 底部导航居中收窄（`min(92vw,372px)`）、压扁（导航项 46px、图标 20px、标签 9.5px），子菜单同步居中。
+- 服务控制按钮在窄屏保留文字；标题允许换行；日志与表格容器内横向滚动。
+- 回复模板去掉「magnet_hash 改为文件 MD4 {normalized} 行」，改为「校对 / 预检 / 导入」三行；自动导入与手动导入共用同一套统计（`reply_text` / `manual_success_text` 默认值同步更新）。
+- 测试：399 passed。
+
 ## 2026.11.20.1
 
 - magnet_import：手动指令（回复 CSV 发 `/导入`）在任何模式下都生效；`manual_only` 只控制「非指令消息是否走自动导入」，自动模式仍按 `file_name_pattern` + 授权用户过滤。

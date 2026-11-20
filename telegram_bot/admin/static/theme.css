@@ -1164,10 +1164,7 @@ label.inline-setting {
 .field-row input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
 .setting-form select,
 .service-form select,
-.field-row select,
-.setting-form textarea,
-.service-form textarea,
-.field-row textarea {
+.field-row select {
   width: 100% !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
@@ -1182,7 +1179,7 @@ label.inline-setting {
 .setting-form textarea,
 .service-form textarea,
 .field-row textarea {
-  height: auto !important;
+  height: auto;
   min-height: 44px !important;
   padding: 8px 10px !important;
   resize: vertical !important;
@@ -1307,9 +1304,7 @@ button.chip {
 .template-fields input:not([type="checkbox"]):not([type="radio"]),
 .site-fields input:not([type="checkbox"]):not([type="radio"]),
 .template-fields select,
-.site-fields select,
-.template-fields textarea,
-.site-fields textarea {
+.site-fields select {
   width: 100% !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
@@ -1322,13 +1317,19 @@ button.chip {
 }
 .template-fields textarea,
 .site-fields textarea {
-  height: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  height: auto;
   min-height: 44px !important;
   padding: 8px 10px !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  border-radius: var(--r-ctl) !important;
+  resize: vertical !important;
 }
 .template-fields .cron-field textarea,
 .site-fields .cron-field textarea {
-  height: var(--ctl-h) !important;
   min-height: var(--ctl-h) !important;
   padding: 7px 10px !important;
 }
@@ -1492,4 +1493,12 @@ label.secret-field,
   .nav-item > span:not(.nav-ico):not(.chevron) { font-size: 9.5px !important; }
   .stat-grid, .kpi-grid { grid-template-columns: minmax(0, 1fr) !important; }
   .top-actions .btn, .top-actions button { padding: 0 8px !important; font-size: 11.5px !important; }
+}
+
+/* 多行输入框必须能拖拽放大：height 千万不能用 !important 钉死，否则 resize 手柄拖了不生效 */
+textarea {
+  height: auto;
+  min-height: var(--ctl-h);
+  resize: vertical;
+  overflow-y: auto;
 }

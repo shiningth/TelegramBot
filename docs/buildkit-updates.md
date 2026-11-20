@@ -19,6 +19,13 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.20.1
+
+- magnet_import：手动指令（回复 CSV 发 `/导入`）在任何模式下都生效；`manual_only` 只控制「非指令消息是否走自动导入」，自动模式仍按 `file_name_pattern` + 授权用户过滤。
+- 自动导入的完成回复改用与手动一致的模板（校对 / 预检 / 导入四行统计），模板在面板 `reply_text` 可改。
+- 前端静态资源加版本号（`/app.js?v=`、`/styles.css?v=`、`/theme.css?v=`），避免浏览器缓存旧脚本导致图标与样式显示异常。
+- 测试：399 passed。
+
 ## 2026.11.18.1
 
 - 0ff 在 11-18 00:01 报「滑动认证未通过：滑块脚本里没有找到验证地址」：0 点重置高峰时站点返回的 slide_check 脚本里没有 set_access_token 地址，属服务端抖动。

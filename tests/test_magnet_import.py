@@ -524,3 +524,33 @@ def test_precheck_error_does_not_block_import(tmp_path):
     assert len(importer.calls) == 1
     assert b"IPX-001" in importer.calls[0]["content"]
 
+
+def test_manual_command_still_works_in_auto_mode(tmp_path):
+    """自动模式下，回复 CSV 发 /导入 仍然要能手动触发（手动模式在任何情况下都生效）。"""
+    importer = FakeImporter()
+    module = make_module(tmp_path, importer, manual_only=False,
+                         sender_ids=["123"], sender_usernames=[])
+    client = ManualClient()
+    command = make_command(make_message())
+    asyncio.run(_dispatch(module, command, client))
+    assert len(importer.calls) == 1
+    assert client.sent[-1]["reply_to"] == command.id
+
+
+def test_auto_mode_ignores_plain_upload_from_unauthorized_sender(tmp_path):
+    """自动模式下，非授权用户直接上传的 CSV 不导入。"""
+    importer = FakeImporter()
+    module = make_module(tmp_path, importer, manual_only=False,
+                         sender_ids=["999"], sender_usernames=[])
+    asyncio.run(_dispatch(module, make_message(), FakeClient()))
+    assert importer.calls == []
+
+
+def test_auto_mode_imports_plain_upload_from_authorized_sender(tmp_path):
+    """自动模式下，授权用户直接上传且文件名命中规则时自动导入。"""
+    importer = FakeImporter()
+    module = make_module(tmp_path, importer, manual_only=False,
+                         sender_ids=["123"], sender_usernames=[])
+    asyncio.run(_dispatch(module, make_message(), FakeClient()))
+    assert len(importer.calls) == 1
+

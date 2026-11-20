@@ -102,11 +102,10 @@ class MagnetImportModule:
         client = getattr(event, "client", None)
         command = None
         command_label = ""
-        if self.config.manual_only:
-            text = str(getattr(message, "raw_text", None) or getattr(message, "message", "") or "").strip()
-            matched = self._match_manual_command(text)
-            if matched is None or client is None:
-                return HandlerResult.ignored(self.card.id)
+        # 手动指令在任何模式下都生效；只有没匹配到指令时，才按 manual_only 决定是否走自动导入
+        text = str(getattr(message, "raw_text", None) or getattr(message, "message", "") or "").strip()
+        matched = self._match_manual_command(text) if (client is not None and text) else None
+        if matched is not None:
             kind, word, target = matched
             command_label = f"@{target} {word}" if kind == "mention" else word
             if target:
@@ -137,6 +136,9 @@ class MagnetImportModule:
                     command=command_label,
                 )
                 return HandlerResult.handled(self.card.id, "manual import needs CSV reply")
+        elif self.config.manual_only:
+            # 手动模式下，非指令消息一律忽略
+            return HandlerResult.ignored(self.card.id)
         name = document_name(message)
         if not getattr(message, "document", None) or not name or not self._name_matches(name):
             if command is not None:

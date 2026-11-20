@@ -12,7 +12,36 @@ Python + Telethon 写的模块化 Telegram 机器人，自带 Web 管理后台�
 docker pull shiningth/tgbot:latest
 ```
 
-Portainer → Stacks → Add stack → 粘贴 [`portainer-stack.yml`](portainer-stack.yml)，设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 后部署。
+Portainer → Stacks → Add stack → Web editor，粘贴下面的模板，设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD`（可选 `TGBOT_DATA_DIR`、`ADMIN_PORT`、`ADMIN_BIND_IP`）后部署：
+
+```yaml
+services:
+  telegrambot:
+    image: shiningth/tgbot:latest
+    container_name: tgbot
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    ports:
+      - "${ADMIN_BIND_IP:-0.0.0.0}:${ADMIN_PORT:-8088}:8088"
+    environment:
+      TZ: Asia/Shanghai
+      TGBOT_ADMIN_HOST: 0.0.0.0
+      TGBOT_ADMIN_PORT: "8088"
+      TGBOT_ADMIN_USERNAME: "${ADMIN_USERNAME:?请设置后台用户名}"
+      TGBOT_ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请设置后台密码}"
+    volumes:
+      - ${TGBOT_DATA_DIR:-/opt/tgbot}:/data
+      - ${TGBOT_DATA_DIR:-/opt/tgbot}/sessions:/app/sessions
+      - ${TGBOT_DATA_DIR:-/opt/tgbot}/runtime:/app/runtime
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+模板文件也在仓库里：[`portainer-stack.yml`](portainer-stack.yml)（本地自行构建镜像时用那一份，多了 `pull_policy: never`）。
 
 | 项 | 说明 |
 | --- | --- |
@@ -64,7 +93,7 @@ python3 scripts/repair_missing_covers.py --limit 50  # 默认每 10 秒一条
 
 ## 首次配置
 
-1. 用上面的镜像 + `portainer-stack.yml` 部署，设置后台账号密码；
+1. 用上面的堆栈模板部署，设置后台账号密码；
 2. 打开 `http://服务器IP:8088` 登录；
 3. 申请 `api_id` / `api_hash`、建 bot 拿 Token（见 [Telegram API 与登录](docs/telegram-api.md)）；
 4. 填监听群和需要的模块，最后启用 Telegram；个人账号登录在容器 Console 里做；

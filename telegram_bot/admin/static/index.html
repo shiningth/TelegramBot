@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -579,9 +579,11 @@
           </div>
           <p id="magnetImportModeHelp" class="hint"></p>
           <div class="magnet-form-lead">
+            <p class="hint">机器人默认只能收到 <code>/import</code> 这类英文指令和「回复它自己的消息」，收不到群里的普通文件和中文 <code>/导入</code>。所以先二选一：把它设为<strong>群管理员</strong>，或在 @BotFather 用 <code>/setprivacy</code> 关闭隐私模式（改完要把机器人移出群再邀请回来才生效）。不处理的话，自动导入永远看不到文件，手动指令也会时灵时不灵。</p>
+          </div>
+          <div class="magnet-form-lead">
             <p class="hint">用法：右键 CSV 文件消息 → 回复 → 发送手动指令（默认 <code>/导入</code>、<code>/import</code>，也支持 <code>@机器人用户名 导入</code>）。</p>
             <p class="hint">指令和所有回复文案都能在下面直接改，保存后即时生效，不需要改代码或重新打包。</p>
-            <p class="hint">中文指令需要把机器人设为群管理员，或关闭群隐私模式。</p>
           </div>
           <form id="magnetImportSettingsForm" class="setting-form ai-setting-form magnet-form">
             <div class="field-row cols-2">

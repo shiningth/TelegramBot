@@ -25,7 +25,7 @@ from telethon.errors import (
 
 CONFIG = Path("/data/config/config.json")
 SESSION = Path("/app/sessions/ltx_user")
-CHANNEL = "examplechan"
+CHANNEL = "ltxjasna"
 
 _TYPE_HINT = {
     "SentCodeTypeApp": "已发送到你的 Telegram App —— 请打开与「Telegram」官方账号的对话查看（不是短信）",
@@ -37,9 +37,21 @@ _TYPE_HINT = {
 }
 
 
+_MISSING_TIP = (
+    "收不到时按这个顺序排查：\n"
+    "  1) 打开手机上已登录的 Telegram，点聊天列表最上方的「Login code / 登录码」一条，"
+    "或搜索官方账号「Telegram」（蓝色认证，id 777000）——验证码在这里，不在短信里；\n"
+    "  2) 同一条码只认最后一次请求，重复运行脚本会让旧码失效，先等 60 秒再看；\n"
+    "  3) 还是没有：重跑并加 --sms 强制走短信（部分号码/地区收不到短信）；\n"
+    "  4) 最稳的是重跑加 --qr，用已登录的手机扫码，全程不需要验证码。"
+)
+
+
 def _describe(sent) -> None:
     kind = type(getattr(sent, "type", None)).__name__
     print(f"发送方式：{_TYPE_HINT.get(kind, kind)}")
+    if kind in {"SentCodeTypeApp", "SentCodeTypeFragmentSms"}:
+        print(_MISSING_TIP)
     timeout = getattr(sent, "timeout", None)
     if timeout:
         print(f"注意：{timeout} 秒内不能再次请求，太频繁会被临时限制。")

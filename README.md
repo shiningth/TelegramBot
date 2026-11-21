@@ -72,6 +72,7 @@ services:
    ```bash
    docker exec -it tgbot python /app/scripts/telegram_user_login.py
    ```
+   **收不到验证码**：默认走的是「发到你已登录的 Telegram」，不是短信——去聊天列表最上方的「Login code」或官方账号「Telegram」（id 777000）里找；同一条码只认最后一次请求，重复运行会让旧码失效。还没有就加 `--sms` 强制短信，或加 `--qr` 用已登录的手机扫码（不需要验证码，最稳）。
 2. 后台「磁力数据导入(momo 专用) → 频道自动采集」填监控频道——用户名、`@用户名`、`t.me` 链接、数字 ID 都行；**频道主取消公开用户名后只能用数字 ID**，面板会直接提示。
 3. 按需开「试运行」先看解析结果，确认无误再关掉；汇总通知可指定「接收 bot 的 Token + chat id」，由那个 bot 直接推给你。
 

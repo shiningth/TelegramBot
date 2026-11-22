@@ -100,6 +100,7 @@ class TelegramAdapter:
         self._programmatic_messages = ProgrammaticMessageTracker()
         self.connected = False
         self.last_error = ""
+        self.username = ""
 
     async def start(self) -> None:
         if not self.config.enabled:
@@ -152,6 +153,12 @@ class TelegramAdapter:
         else:
             await self.client.start()
         self.connected = True
+        self.last_error = ""
+        try:
+            me = await self.client.get_me()
+        except Exception:  # noqa: BLE001 - 拿不到自己信息不影响运行
+            me = None
+        self.username = str(getattr(me, "username", "") or "")
         logger.info("Telegram adapter connected")
 
     async def _handle_monitored_event(self, event: Any, event_name: str) -> None:
@@ -303,6 +310,7 @@ class TelegramAdapter:
             "enabled": self.config.enabled,
             "connected": self.connected,
             "session_name": self.config.session_name,
+            "username": self.username,
             "monitored_groups": self.config.monitored_groups,
             "last_error": self.last_error,
         }

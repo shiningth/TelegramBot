@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .admin import AdminServer
-from .config import AIProviderConfig, AppConfig
+from .config import AIProviderConfig, AppConfig, telegram_env_names
 from .jobs import ChatHistoryBackfillJob
 from .logging_setup import RecentLogBuffer, configure_logging
 from .modules import ModuleRegistry, create_default_registry
@@ -20,6 +20,7 @@ from .runtime import RuntimeMetrics, ensure_runtime_dirs, system_snapshot
 from .telegram import TelegramAdapter
 from .usage import build_ai_usage_stats
 from .shared.checkin_sender import PersonalCheckinSender
+from .shared.tgcheck import check_api_credentials, check_bot_token, check_formats
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,117 @@ class TelegramBotApplication:
         self.config.save(self.config_path)
         logger.info("Settings updated from admin UI")
 
+    # ------------------------------------------------------------------
+    # Telegram 凭证（面板「系统设置 → Telegram 凭证」）
+    # ------------------------------------------------------------------
+    def telegram_settings_snapshot(self) -> dict[str, Any]:
+        tg = self.config.telegram
+        status = self.telegram.status()
+        return {
+            "enabled": bool(tg.enabled),
+            "api_id": tg.api_id,
+            "has_api_hash": bool(tg.api_hash),
+            "has_bot_token": bool(tg.bot_token),
+            "session_name": tg.session_name,
+            "connected": bool(status.get("connected")),
+            "bot_username": str(status.get("username") or ""),
+            "last_error": str(status.get("last_error") or ""),
+            "env_override": telegram_env_names(),
+        }
+
+    def update_telegram_settings(self, values: dict[str, Any]) -> dict[str, Any]:
+        telegram = values.get("telegram")
+        if not isinstance(telegram, dict):
+            telegram = values if isinstance(values, dict) else {}
+        tg = self.config.telegram
+        changed: list[str] = []
+
+        if "api_id" in telegram:
+            raw = str(telegram.get("api_id") or "").strip()
+            if raw:
+                if not raw.isdigit():
+                    raise ValueError("api_id 必须是数字")
+                api_id = int(raw)
+                if api_id != tg.api_id:
+                    tg.api_id = api_id
+                    changed.append("api_id")
+        for field, label in (("api_hash", "api_hash"), ("bot_token", "bot_token")):
+            if field not in telegram:
+                continue
+            value = str(telegram.get(field) or "").strip()
+            if not value or "***" in value:
+                continue
+            if value != getattr(tg, field):
+                setattr(tg, field, value)
+                changed.append(label)
+        if "enabled" in telegram:
+            enabled = bool(telegram.get("enabled"))
+            if enabled != tg.enabled:
+                tg.enabled = enabled
+                changed.append("enabled")
+
+        if not changed:
+            return {**self.telegram_settings_snapshot(), "changed": [], "restarting": False}
+
+        self.config.save(self.config_path)
+        restarting = any(item in changed for item in ("api_id", "api_hash", "bot_token", "enabled"))
+        if restarting:
+            self._schedule_telegram_restart()
+        logger.info("Telegram 凭证由面板更新：changed=%s restart=%s", changed, restarting)
+        return {**self.telegram_settings_snapshot(), "changed": changed, "restarting": restarting}
+
+    def test_telegram_settings(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        telegram = payload.get("telegram")
+        if not isinstance(telegram, dict):
+            telegram = payload
+        tg = self.config.telegram
+
+        api_id: object = telegram.get("api_id") or tg.api_id
+        api_hash = str(telegram.get("api_hash") or "").strip()
+        if not api_hash or "***" in api_hash:
+            api_hash = tg.api_hash
+        bot_token = str(telegram.get("bot_token") or "").strip()
+        if not bot_token or "***" in bot_token:
+            bot_token = tg.bot_token
+
+        checks: list[dict[str, object]] = []
+        format_checks = check_formats(api_id, api_hash, bot_token)
+        checks.extend(format_checks)
+        if all(bool(item.get("ok")) for item in format_checks):
+            # 格式都对才值得发网络请求，避免拿明显不对的凭证去连 Telegram
+            checks.append(check_bot_token(bot_token))
+            checks.append(check_api_credentials(api_id, api_hash))
+        return {
+            "ok": all(bool(item.get("ok")) for item in checks),
+            "checks": checks,
+            "connected": bool(self.telegram.connected),
+            "bot_username": str(self.telegram.username or ""),
+        }
+
+    def _schedule_telegram_restart(self) -> None:
+        if not self.loop:
+            self.telegram.last_error = "凭证已保存，但事件循环未就绪，请重启容器使其生效"
+            logger.warning("事件循环未就绪，跳过 Telegram 适配器重启")
+            return
+        asyncio.run_coroutine_threadsafe(self._restart_telegram(), self.loop)
+
+    async def _restart_telegram(self) -> None:
+        try:
+            await self.telegram.stop()
+        except Exception:  # noqa: BLE001 - 停不下来也要继续尝试重连
+            logger.warning("停止 Telegram 适配器时出错", exc_info=True)
+        try:
+            await self.telegram.start()
+            logger.info(
+                "Telegram 适配器已按新凭证重连：connected=%s user=%s",
+                self.telegram.connected,
+                self.telegram.username or "-",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.telegram.last_error = f"按新凭证重连失败：{exc}"
+            logger.exception("按新凭证重启 Telegram 适配器失败")
+
     def run_module_action(
         self,
         module_id: str,
@@ -313,11 +425,6 @@ class TelegramBotApplication:
         if "enabled" in values:
             enabled = bool(values["enabled"])
             module.card.enabled = enabled
-            # 模块自己的 config.enabled 也要跟着变：site_checkin 的定时循环检查的就是它，
-            # 只在面板打开开关、而 config.enabled 还是 False 时，任务会「启动但不干活」。
-            module_config = getattr(module, "config", None)
-            if module_config is not None and hasattr(module_config, "enabled"):
-                setattr(module_config, "enabled", enabled)
             if hasattr(self.config.modules, module_id):
                 setattr(self.config.modules, module_id, enabled)
             if module_id == "ai_reply":

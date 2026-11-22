@@ -171,6 +171,10 @@ if (logRefreshIntervalInput) {
 }
 document.getElementById("loadGroups").addEventListener("click", loadGroups);
 bindSaveButton("saveGroups", saveGroups, "监听群组已保存并实时生效");
+document.getElementById("testTelegramCreds").addEventListener("click", () => {
+  void testTelegramSettings();
+});
+bindSaveButton("saveTelegramCreds", saveTelegramSettings, "Telegram 凭证已保存");
 bindSaveButton("saveAiServicesConfig", saveAiServicesConfig, "AI 服务配置已保存");
 bindSaveButton("saveAiReplyConfig", saveAiReplyConfig, "AI 自动回复配置已保存");
 bindSaveButton("saveUserProfileConfig", saveUserProfileConfig, "群友画像配置已保存");
@@ -365,6 +369,9 @@ function prepareView(viewId) {
     state.logsViewingFile = false;
     updateLogRefreshState();
     refreshLogs();
+  }
+  if (viewId === "settings") {
+    void loadTelegramSettings();
   }
   if (viewId === "aiUsage") refreshAiUsage();
 }
@@ -2612,6 +2619,114 @@ async function refreshSettings() {
     renderGroupsFromConfig(data.telegram.monitored_groups);
   } else {
     updateGroupCount();
+  }
+}
+
+function telegramCredsStateText(data) {
+  if (!data) return "尚未读取状态";
+  const parts = [];
+  if (Array.isArray(data.env_override) && data.env_override.length) {
+    parts.push(`环境变量 ${data.env_override.join(" / ")} 已接管`);
+  }
+  if (!data.enabled) parts.push("机器人已禁用");
+  if (data.connected) parts.push(`已连接${data.bot_username ? ` @${data.bot_username}` : ""}`);
+  else if (data.enabled) parts.push(`未连接${data.last_error ? `（${data.last_error}）` : ""}`);
+  if (data.api_id) parts.push(`api_id ${data.api_id}`);
+  parts.push(data.has_api_hash ? "api_hash 已保存" : "api_hash 未填");
+  parts.push(data.has_bot_token ? "token 已保存" : "token 未填");
+  return parts.join(" · ");
+}
+
+function fillTelegramSettings(data) {
+  const form = document.getElementById("telegramCredsForm");
+  if (!form) return;
+  form.elements.telegram_enabled.checked = Boolean(data && data.enabled);
+  form.elements.api_id.value = data && data.api_id ? String(data.api_id) : "";
+  const hashInput = form.elements.api_hash;
+  hashInput.value = "";
+  hashInput.placeholder = data && data.has_api_hash ? "已保存（留空不改）" : "32 位十六进制";
+  resetSecretInput(hashInput);
+  const tokenInput = form.elements.bot_token;
+  tokenInput.value = "";
+  tokenInput.placeholder = data && data.has_bot_token ? "已保存（留空不改）" : "123456789:AA…";
+  resetSecretInput(tokenInput);
+  const stateLabel = document.getElementById("telegramCredsState");
+  if (stateLabel) stateLabel.textContent = telegramCredsStateText(data);
+}
+
+function collectTelegramSettings() {
+  const form = document.getElementById("telegramCredsForm");
+  const payload = { enabled: Boolean(form.elements.telegram_enabled.checked) };
+  const apiId = form.elements.api_id.value.trim();
+  if (apiId) payload.api_id = apiId;
+  const apiHash = form.elements.api_hash.value.trim();
+  if (apiHash) payload.api_hash = apiHash;
+  const botToken = form.elements.bot_token.value.trim();
+  if (botToken) payload.bot_token = botToken;
+  return payload;
+}
+
+async function loadTelegramSettings() {
+  const stateLabel = document.getElementById("telegramCredsState");
+  try {
+    const data = await getJson("/api/settings/telegram");
+    fillTelegramSettings(data);
+    return data;
+  } catch (error) {
+    if (stateLabel) stateLabel.textContent = `读取失败：${error.message}`;
+    return null;
+  }
+}
+
+function setTelegramCredsResult(ok, lines) {
+  const box = document.getElementById("telegramCredsResult");
+  if (!box) return;
+  box.hidden = false;
+  box.classList.remove("ok", "bad");
+  box.classList.add(ok ? "ok" : "bad");
+  box.innerHTML = "";
+  lines.forEach((line) => {
+    const row = document.createElement("div");
+    row.textContent = line;
+    box.appendChild(row);
+  });
+}
+
+async function saveTelegramSettings() {
+  const result = await putJson("/api/settings/telegram", { telegram: collectTelegramSettings() });
+  fillTelegramSettings(result);
+  const changed = Array.isArray(result.changed) ? result.changed : [];
+  if (result.restarting) {
+    setTelegramCredsResult(true, [`已保存并触发重连（${changed.join(" / ") || "凭证变更"}）`, "几秒后刷新页面即可看到最新连接状态。"]);
+  } else {
+    setTelegramCredsResult(true, ["已保存（凭证没有变化，无需重连）。"]);
+  }
+  return { ok: true };
+}
+
+async function testTelegramSettings() {
+  const button = document.getElementById("testTelegramCreds");
+  const original = button ? button.textContent : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "测试中…";
+  }
+  try {
+    const result = await postJson("/api/settings/telegram/test", { telegram: collectTelegramSettings() });
+    const lines = (result.checks || []).map((item) => `${item.ok ? "✅" : "❌"} ${item.name}：${item.detail}`);
+    lines.push(result.connected ? `当前连接：已连接${result.bot_username ? ` @${result.bot_username}` : ""}` : "当前连接：未连接");
+    setTelegramCredsResult(Boolean(result.ok), lines);
+    showToast(result.ok ? "凭证全部通过" : "有项目没通过，看下面的结果", result.ok ? "success" : "error");
+    return result;
+  } catch (error) {
+    setTelegramCredsResult(false, [`测试失败：${error.message}`]);
+    showToast(`测试失败：${error.message}`, "error");
+    return { ok: false };
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
   }
 }
 

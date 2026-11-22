@@ -2860,3 +2860,39 @@ textarea:focus {
   font-weight: 700;
   color: var(--ink);
 }
+
+/* Telegram 凭证面板（系统设置） */
+.telegram-creds-state {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: #eef3ff;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.telegram-creds-result {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+
+.telegram-creds-result.ok {
+  background: #eaf7ee;
+  border-color: #bde5c8;
+  color: #1f6b36;
+}
+
+.telegram-creds-result.bad {
+  background: #fdeef0;
+  border-color: #f3c3c9;
+  color: #8c2333;
+}

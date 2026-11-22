@@ -19,6 +19,14 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.22.1
+
+- 面板「系统设置 → Telegram 凭证」：api_id / api_hash / Bot Token 三项直接在网页里填，密文只回显掩码（留空或含 `***` 表示保持原值），保存后凭证或开关有变化会自动停掉再连，不用重启容器；面板标明 `TGBOT_TELEGRAM_*` 环境变量优先。
+- 「测试凭证」按钮：先做纯本地格式检查（三项全对才发网络请求），再用 `getMe` 验 bot token、用 `help.getConfig`（MemorySession）验 api_id/api_hash；只做无副作用探测，不写 session、不触发登录码、不发消息。
+- 新增 `telegram_bot/shared/tgcheck.py`（`check_formats` / `check_bot_token` / `check_api_credentials`）、`botapi.get_me()`、`app.telegram_settings_snapshot()` / `update_telegram_settings()` / `test_telegram_settings()`；路由 `GET|PUT /api/settings/telegram`、`POST /api/settings/telegram/test`（始终 200，前端按 `ok` 渲染）。
+- `TelegramAdapter` 记录 `username`，面板可直接显示机器人自己的 @用户名与连接状态。
+- 测试：新增 `tests/test_telegram_settings.py` 9 例（掩码不回显、留空不覆盖、无变更不重连、格式错不联网、空值回落已存凭证），全套 412 passed。
+
 ## 2026.11.20.3
 
 - 站点签到详情更好读：结果里带上「本次获得 N 个魔力值」「连续 N 天」。

@@ -236,6 +236,8 @@ class AdminServer:
                     self._json(app.ai_usage_snapshot(range_key))
                 elif parsed.path == "/api/settings":
                     self._json(app.settings_snapshot())
+                elif parsed.path == "/api/settings/telegram":
+                    self._json(app.telegram_settings_snapshot())
                 elif parsed.path == "/api/groups":
                     try:
                         self._json({"groups": app.list_groups()})
@@ -293,6 +295,8 @@ class AdminServer:
                 elif parsed.path == "/api/modules/site_checkin/run":
                     result = app.run_module_action("site_checkin", "run_now", body=self._body_json())
                     self._json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+                elif parsed.path == "/api/settings/telegram/test":
+                    self._json(app.test_telegram_settings(self._body_json()))
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -300,6 +304,13 @@ class AdminServer:
                 body = self._body_json()
                 if parsed.path == "/api/ai":
                     self._json({"ok": True, "ai": app.update_ai_config(body)})
+                elif parsed.path == "/api/settings/telegram":
+                    try:
+                        result = app.update_telegram_settings(body)
+                    except ValueError as exc:
+                        self._json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                        return
+                    self._json({"ok": True, **result})
                 elif parsed.path == "/api/settings":
                     app.update_settings(body)
                     self._json({"ok": True, "settings": app.settings_snapshot()})

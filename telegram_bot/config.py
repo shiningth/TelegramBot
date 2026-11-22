@@ -695,6 +695,19 @@ class AppConfig:
         return data
 
 
+_TELEGRAM_ENV_KEYS = (
+    "TGBOT_TELEGRAM_API_ID",
+    "TGBOT_TELEGRAM_API_HASH",
+    "TGBOT_TELEGRAM_BOT_TOKEN",
+    "TGBOT_TELEGRAM_ENABLED",
+)
+
+
+def telegram_env_names() -> list[str]:
+    """面板里提示用：哪些 Telegram 凭证被环境变量接管了（环境变量优先于面板）。"""
+    return [name for name in _TELEGRAM_ENV_KEYS if os.getenv(name) not in (None, "")]
+
+
 def _apply_env_overrides(config: dict[str, Any]) -> None:
     env_map = {
         "TGBOT_ADMIN_HOST": ("admin", "host"),

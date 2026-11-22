@@ -866,6 +866,36 @@
         <section class="panel settings-panel">
           <div class="panel-head">
             <div>
+              <h2>Telegram 凭证</h2>
+              <p class="hint">机器人靠这三项连上 Telegram。保存后立即用新凭证重连，不用重启容器；密文留空表示保持原值。</p>
+            </div>
+            <div class="group-actions">
+              <button id="testTelegramCreds" type="button">测试凭证</button>
+              <button id="saveTelegramCreds" class="primary" type="button">保存</button>
+            </div>
+          </div>
+          <form id="telegramCredsForm" class="magnet-form" autocomplete="off">
+            <div class="field-row">
+              <label class="check-row"><input type="checkbox" name="telegram_enabled" /><span>启用机器人（关闭后面板仍可打开，但不收发 Telegram 消息）</span></label>
+            </div>
+            <div class="field-row cols-2">
+              <label class="stacked"><span>api_id</span><input name="api_id" type="text" inputmode="numeric" autocomplete="off" placeholder="my.telegram.org 里的 App api_id"></label>
+              <label class="stacked secret-field"><span>api_hash</span><span class="secret-input"><input name="api_hash" type="password" autocomplete="new-password" data-secret-input placeholder="32 位十六进制，留空则不修改"><button type="button" class="secret-toggle" data-secret-toggle aria-pressed="false">显示</button></span></label>
+            </div>
+            <div class="field-row">
+              <label class="stacked wide-field secret-field"><span>Bot Token</span><span class="secret-input"><input name="bot_token" type="password" autocomplete="new-password" data-secret-input placeholder="123456789:AA… 留空则不修改"><button type="button" class="secret-toggle" data-secret-toggle aria-pressed="false">显示</button></span></label>
+            </div>
+            <div class="field-row">
+              <div id="telegramCredsState" class="telegram-creds-state">尚未读取状态</div>
+            </div>
+            <div id="telegramCredsResult" class="telegram-creds-result" hidden></div>
+            <p class="hint wide-field section-hint"><strong>凭证来源</strong>：https://my.telegram.org → API development tools。一套 api_id/api_hash 同时供机器人、频道采集和定时签到用的用户会话；凭证明文只写在本机 config.json，面板只回显掩码。如果部署时配了 <code>TGBOT_TELEGRAM_*</code> 环境变量，环境变量优先于这里填的值。</p>
+          </form>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div>
               <h2>监听群组</h2>
               <p class="hint">点击加载群组后勾选需要监听的 Telegram 群组。</p>
             </div>

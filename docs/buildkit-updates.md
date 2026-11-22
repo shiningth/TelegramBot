@@ -19,6 +19,16 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.22.2
+
+- 面板「系统设置 → 用户会话」：手机号 + 会话名就能登录用户账号（频道采集、定时签到共用），不用再进容器跑脚本；支持验证码、两步验证密码、取消、刷新，列出已登录的 `.session` 文件。
+- 登录过程先写临时文件 `<名字>.<ticket>.session`，登录成功才改名为 `<名字>.session`；失败或取消直接删掉——避免失败的会话文件被当成「已登录」。
+- FloodWait 等错误翻成中文：`Telegram 要求等待 15.2 小时 才能再请求验证码（短时间请求多次）…`，另含手机号无效/被封、验证码错误/过期、两步验证密码错误、api_id 无效等提示。
+- 会话文件被模块占用时报「database is locked」→ 面板提示先在对应模块关掉开关（频道采集前必须关）。
+- 修 CSS 覆盖问题：`theme.css` 里 `.field-row > label { display: grid !important }` 会压掉 `hidden` 属性，隐藏的验证码行仍显示；改为内联 `display:none !important` + 全局 `[hidden]{display:none!important}`。
+- 新增 `telegram_bot/shared/session_login.py`（`SessionLoginManager`、`normalize_phone`、`safe_session_name`、`mask_phone`、`_login_error_text`），`app.py` 七个方法，路由 `GET /api/sessions/telegram` 与 `POST /api/sessions/telegram/{code,verify,password,cancel}`。
+- 测试：新增 `tests/test_session_login.py` 17 例（手机号归一、会话名防穿越、打码、临时文件不计入列表、失败不留 session、ticket 过期、缺凭证、无 loop 兜底）；全套 429 passed。
+
 ## 2026.11.22.1
 
 - 面板「系统设置 → Telegram 凭证」：api_id / api_hash / Bot Token 三项直接在网页里填，密文只回显掩码（留空或含 `***` 表示保持原值），保存后凭证或开关有变化会自动停掉再连，不用重启容器；面板标明 `TGBOT_TELEGRAM_*` 环境变量优先。

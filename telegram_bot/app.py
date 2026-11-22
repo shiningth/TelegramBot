@@ -20,9 +20,43 @@ from .runtime import RuntimeMetrics, ensure_runtime_dirs, system_snapshot
 from .telegram import TelegramAdapter
 from .usage import build_ai_usage_stats
 from .shared.checkin_sender import PersonalCheckinSender
+from .shared.session_login import SessionLoginManager
 from .shared.tgcheck import check_api_credentials, check_bot_token, check_formats
 
 logger = logging.getLogger(__name__)
+
+
+_LOGIN_ERROR_HINTS = (
+    ("PhoneNumberInvalidError", "手机号无效，检查国家码和号码本身"),
+    ("PhoneNumberBannedError", "这个手机号已被 Telegram 封禁"),
+    ("PhoneNumberUnoccupiedError", "这个手机号没有注册 Telegram"),
+    ("PhoneCodeInvalidError", "验证码不对，重新输一次；多次错误需要重新发码"),
+    ("PhoneCodeExpiredError", "验证码过期了，重新点「发送验证码」"),
+    ("PasswordHashInvalidError", "两步验证密码不对"),
+    ("ApiIdInvalidError", "api_id/api_hash 无效，先在上面填好正确的凭证"),
+    ("SessionPasswordNeededError", "这个账号开了两步验证，请在「两步验证密码」里填密码"),
+)
+
+
+def _login_error_text(detail: str) -> str:
+    """把 Telethon 的异常名翻成面板上能直接照做的话。"""
+    if "FloodWait" in detail:
+        seconds = 0
+        for token in detail.replace("(", " ").replace(")", " ").split():
+            if token.isdigit():
+                seconds = int(token)
+                break
+        if seconds >= 3600:
+            wait = f"{seconds / 3600:.1f} 小时"
+        elif seconds >= 60:
+            wait = f"{max(1, seconds // 60)} 分钟"
+        else:
+            wait = f"{seconds} 秒"
+        return f"Telegram 要求等待 {wait} 才能再请求验证码（短时间请求太多次）。等待期间可以直接用已经登录好的会话，或改天再登录"
+    for name, text in _LOGIN_ERROR_HINTS:
+        if name in detail:
+            return text
+    return detail
 
 
 class TelegramBotApplication:
@@ -35,6 +69,7 @@ class TelegramBotApplication:
         self.modules: ModuleRegistry = create_default_registry(config, self.project_root, self.chat_history)
         self.recent_logs: RecentLogBuffer = RecentLogBuffer()
         self.telegram = TelegramAdapter(config.telegram, self.project_root, self._on_telegram_message)
+        self.session_login = SessionLoginManager(self._sessions_dir())
         self.chat_history_backfill = ChatHistoryBackfillJob(
             config.chat_history,
             config.telegram,
@@ -365,6 +400,83 @@ class TelegramBotApplication:
             "connected": bool(self.telegram.connected),
             "bot_username": str(self.telegram.username or ""),
         }
+
+    # ------------------------------------------------------------------
+    # 用户会话登录（面板「系统设置 → 用户会话」）
+    # ------------------------------------------------------------------
+    def _sessions_dir(self) -> Path:
+        directory = Path(self.config.telegram.session_dir)
+        if not directory.is_absolute():
+            directory = self.project_root / directory
+        return directory
+
+    def _sessions_in_use(self) -> list[str]:
+        used: list[str] = []
+        ltx = self.modules.get("ltx_watch")
+        client = getattr(ltx, "_client", None) if ltx is not None else None
+        if client is not None and getattr(client, "is_connected", lambda: False)():
+            used.append(str(getattr(ltx.config, "session_name", "ltx_user")))
+        return used
+
+    def session_login_state(self) -> dict[str, Any]:
+        state = self.session_login.state()
+        state["in_use"] = self._sessions_in_use()
+        state["api_ready"] = bool(self.config.telegram.api_id and self.config.telegram.api_hash)
+        return state
+
+    def start_session_login(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        phone = str(payload.get("phone") or "")
+        name = str(payload.get("session_name") or "ltx_user")
+        api_id = int(self.config.telegram.api_id or 0)
+        api_hash = str(self.config.telegram.api_hash or "")
+        return self._run_login_action(
+            lambda: self.session_login.send_code(phone=phone, session_name=name, api_id=api_id, api_hash=api_hash),
+            timeout=90.0,
+        )
+
+    def submit_session_code(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        ticket = str(payload.get("ticket") or "")
+        code = str(payload.get("code") or "")
+        return self._run_login_action(
+            lambda: self.session_login.sign_in(ticket=ticket, code=code),
+            timeout=90.0,
+        )
+
+    def submit_session_password(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        ticket = str(payload.get("ticket") or "")
+        password = str(payload.get("password") or "")
+        return self._run_login_action(
+            lambda: self.session_login.check_password(ticket=ticket, password=password),
+            timeout=90.0,
+        )
+
+    def cancel_session_login(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        ticket = str(payload.get("ticket") or "")
+        return self._run_login_action(lambda: self.session_login.cancel(ticket=ticket), timeout=30.0)
+
+    def _run_login_action(self, factory: Any, *, timeout: float) -> dict[str, Any]:
+        if not self.loop:
+            return {"ok": False, "error": "服务未在运行，无法登录会话"}
+        future = asyncio.run_coroutine_threadsafe(factory(), self.loop)
+        try:
+            result = future.result(timeout=timeout)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 - 登录失败要把原因原样回给面板
+            detail = f"{type(exc).__name__}: {exc}"
+            if "database is locked" in detail:
+                detail = "这个会话文件正被占用（采集或签到正在用），请先在对应模块里关掉开关再登录"
+            else:
+                detail = _login_error_text(detail)
+            logger.warning("用户会话登录失败: %s", detail)
+            return {"ok": False, "error": detail[:300]}
+        result = dict(result) if isinstance(result, dict) else {"ok": True, "detail": result}
+        result.update({k: v for k, v in self.session_login_state().items() if k in ("sessions", "pending")})
+        return result
 
     def _schedule_telegram_restart(self) -> None:
         if not self.loop:

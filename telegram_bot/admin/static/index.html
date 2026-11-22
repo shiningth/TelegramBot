@@ -896,6 +896,45 @@
         <section class="panel settings-panel">
           <div class="panel-head">
             <div>
+              <h2>用户会话</h2>
+              <p class="hint">频道自动采集、定时签到要用个人账号登录。这里登录一次就行，不用再进容器敲脚本。</p>
+            </div>
+            <div class="group-actions">
+              <button id="refreshSessions" type="button">刷新</button>
+            </div>
+          </div>
+          <form id="sessionLoginForm" class="magnet-form" autocomplete="off">
+            <div class="field-row cols-2">
+              <label class="stacked"><span>手机号（含国家码）</span><input name="session_phone" type="tel" autocomplete="off" placeholder="+8613800138000"></label>
+              <label class="stacked"><span>会话名</span><input name="session_name" type="text" autocomplete="off" placeholder="ltx_user" value="ltx_user"></label>
+            </div>
+            <div class="field-row">
+              <div class="session-actions">
+                <button id="sendSessionCode" type="button" class="primary">发送验证码</button>
+                <button id="cancelSessionLogin" type="button" hidden>取消登录</button>
+              </div>
+            </div>
+            <div class="field-row cols-2" id="sessionCodeRow" hidden>
+              <label class="stacked"><span>验证码</span><input name="session_code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="Telegram 里收到的 5 位数字"></label>
+              <label class="stacked"><span>两步验证密码（开了才需要）</span><span class="secret-input"><input name="session_password" type="password" autocomplete="new-password" data-secret-input placeholder="没开两步验证就留空"><button type="button" class="secret-toggle" data-secret-toggle aria-pressed="false">显示</button></span></label>
+            </div>
+            <div class="field-row" id="sessionCodeRow2" hidden>
+              <button id="submitSessionCode" type="button" class="primary">登录</button>
+            </div>
+            <div class="field-row">
+              <div id="sessionLoginState" class="telegram-creds-state">尚未读取状态</div>
+            </div>
+            <div id="sessionLoginResult" class="telegram-creds-result" hidden></div>
+            <div class="field-row">
+              <div class="session-files" id="sessionFileList"></div>
+            </div>
+            <p class="hint wide-field section-hint">验证码默认发到已登录的 Telegram 客户端（和「Telegram」官方账号的对话里，顶部就是登录码，不是短信）。同一个会话名不能同时被两个进程使用——登录采集会话前，请先在上面把「频道自动采集」的开关关掉；登录完再打开。</p>
+          </form>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div>
               <h2>监听群组</h2>
               <p class="hint">点击加载群组后勾选需要监听的 Telegram 群组。</p>
             </div>

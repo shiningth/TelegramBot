@@ -238,6 +238,8 @@ class AdminServer:
                     self._json(app.settings_snapshot())
                 elif parsed.path == "/api/settings/telegram":
                     self._json(app.telegram_settings_snapshot())
+                elif parsed.path == "/api/sessions/telegram":
+                    self._json(app.session_login_state())
                 elif parsed.path == "/api/groups":
                     try:
                         self._json({"groups": app.list_groups()})
@@ -297,6 +299,14 @@ class AdminServer:
                     self._json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 elif parsed.path == "/api/settings/telegram/test":
                     self._json(app.test_telegram_settings(self._body_json()))
+                elif parsed.path == "/api/sessions/telegram/code":
+                    self._json(app.start_session_login(self._body_json()))
+                elif parsed.path == "/api/sessions/telegram/verify":
+                    self._json(app.submit_session_code(self._body_json()))
+                elif parsed.path == "/api/sessions/telegram/password":
+                    self._json(app.submit_session_password(self._body_json()))
+                elif parsed.path == "/api/sessions/telegram/cancel":
+                    self._json(app.cancel_session_login(self._body_json()))
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
 

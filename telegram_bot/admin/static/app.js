@@ -175,6 +175,18 @@ document.getElementById("testTelegramCreds").addEventListener("click", () => {
   void testTelegramSettings();
 });
 bindSaveButton("saveTelegramCreds", saveTelegramSettings, "Telegram 凭证已保存");
+document.getElementById("refreshSessions").addEventListener("click", () => {
+  void loadSessionLogin();
+});
+document.getElementById("sendSessionCode").addEventListener("click", () => {
+  void sendSessionCode();
+});
+document.getElementById("submitSessionCode").addEventListener("click", () => {
+  void submitSessionLogin();
+});
+document.getElementById("cancelSessionLogin").addEventListener("click", () => {
+  void cancelSessionLogin();
+});
 bindSaveButton("saveAiServicesConfig", saveAiServicesConfig, "AI 服务配置已保存");
 bindSaveButton("saveAiReplyConfig", saveAiReplyConfig, "AI 自动回复配置已保存");
 bindSaveButton("saveUserProfileConfig", saveUserProfileConfig, "群友画像配置已保存");
@@ -372,6 +384,7 @@ function prepareView(viewId) {
   }
   if (viewId === "settings") {
     void loadTelegramSettings();
+    void loadSessionLogin();
   }
   if (viewId === "aiUsage") refreshAiUsage();
 }
@@ -2727,6 +2740,182 @@ async function testTelegramSettings() {
       button.disabled = false;
       button.textContent = original;
     }
+  }
+}
+
+// ---------------------------------------------------------------- 用户会话登录
+async function loadSessionLogin() {
+  const label = document.getElementById("sessionLoginState");
+  try {
+    const data = await getJson("/api/sessions/telegram");
+    renderSessionLogin(data);
+    return data;
+  } catch (error) {
+    if (label) label.textContent = `读取失败：${error.message}`;
+    return null;
+  }
+}
+
+function setRowVisible(node, visible) {
+  // theme.css 里 .field-row 用了 display:grid !important，只有内联 !important 能压过它
+  if (!node) return;
+  node.hidden = !visible;
+  if (visible) node.style.removeProperty("display");
+  else node.style.setProperty("display", "none", "important");
+}
+
+function renderSessionLogin(data) {
+  const label = document.getElementById("sessionLoginState");
+  const list = document.getElementById("sessionFileList");
+  const pending = (data.pending || [])[0] || null;
+  const codeRow = document.getElementById("sessionCodeRow");
+  const codeRow2 = document.getElementById("sessionCodeRow2");
+  const cancelButton = document.getElementById("cancelSessionLogin");
+  const files = data.sessions || [];
+  if (label) {
+    const parts = [`会话目录：${data.sessions_dir || "-"}`];
+    parts.push(data.api_ready ? "api_id/api_hash 已就绪" : "缺 api_id/api_hash，请先在上面填好并保存");
+    if (pending) parts.push(`进行中：${pending.stage_label}（${pending.phone} → ${pending.session_name}）`);
+    if ((data.in_use || []).length) parts.push(`正在被占用：${data.in_use.join("、")}`);
+    label.textContent = parts.join(" · ");
+  }
+  setRowVisible(codeRow, Boolean(pending));
+  setRowVisible(codeRow2, Boolean(pending));
+  setRowVisible(cancelButton, Boolean(pending));
+  if (pending && pending.detail) setSessionLoginResult(pending.stage !== "failed", [pending.detail]);
+  if (list) {
+    list.innerHTML = "";
+    if (!files.length) {
+      const empty = document.createElement("span");
+      empty.className = "session-file-empty";
+      empty.textContent = "还没有已登录的会话文件";
+      list.appendChild(empty);
+    } else {
+      files.forEach((item) => {
+        const row = document.createElement("span");
+        row.className = "session-file";
+        row.textContent = `${item.name}.session`;
+        const meta = document.createElement("em");
+        meta.textContent = `${item.modified} · ${item.size} B`;
+        row.appendChild(meta);
+        list.appendChild(row);
+      });
+    }
+  }
+}
+
+function setSessionLoginResult(ok, lines) {
+  const box = document.getElementById("sessionLoginResult");
+  if (!box) return;
+  box.hidden = false;
+  box.classList.remove("ok", "bad");
+  box.classList.add(ok ? "ok" : "bad");
+  box.innerHTML = "";
+  lines.forEach((line) => {
+    const row = document.createElement("div");
+    row.textContent = line;
+    box.appendChild(row);
+  });
+}
+
+function collectSessionLogin() {
+  const form = document.getElementById("sessionLoginForm");
+  if (!form) return {};
+  return {
+    phone: form.elements.session_phone?.value.trim() || "",
+    session_name: form.elements.session_name?.value.trim() || "ltx_user",
+    code: form.elements.session_code?.value.trim() || "",
+    password: form.elements.session_password?.value || "",
+  };
+}
+
+async function sendSessionCode() {
+  const button = document.getElementById("sendSessionCode");
+  const original = button ? button.textContent : "";
+  const payload = collectSessionLogin();
+  if (button) {
+    button.disabled = true;
+    button.textContent = "发送中…";
+  }
+  try {
+    const result = await postJson("/api/sessions/telegram/code", payload);
+    if (result.ok) {
+      setSessionLoginResult(true, [result.detail || "验证码已发送", "填好验证码后点「登录」。"]);
+      showToast("验证码已发送", "success");
+    } else {
+      setSessionLoginResult(false, [result.error || "发送失败"]);
+      showToast(result.error || "发送失败", "error");
+    }
+    renderSessionLogin(result.sessions ? result : await getJson("/api/sessions/telegram"));
+    return result;
+  } catch (error) {
+    setSessionLoginResult(false, [`发送失败：${error.message}`]);
+    showToast(`发送失败：${error.message}`, "error");
+    return { ok: false };
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+async function submitSessionLogin() {
+  const button = document.getElementById("submitSessionCode");
+  const original = button ? button.textContent : "";
+  const payload = collectSessionLogin();
+  const stateData = await getJson("/api/sessions/telegram").catch(() => null);
+  const pending = stateData && (stateData.pending || [])[0];
+  if (!pending) {
+    setSessionLoginResult(false, ["没有进行中的登录，请先点「发送验证码」"]);
+    return { ok: false };
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "登录中…";
+  }
+  try {
+    const path = pending.stage === "password_needed" ? "/api/sessions/telegram/password" : "/api/sessions/telegram/verify";
+    const body = { ticket: pending.ticket };
+    if (path.endsWith("/password")) body.password = payload.password;
+    else body.code = payload.code;
+    const result = await postJson(path, body);
+    if (result.ok) {
+      setSessionLoginResult(true, [result.detail || "登录完成", "会话文件已保存，可以关掉页面。"]);
+      showToast("会话登录完成", "success");
+      const form = document.getElementById("sessionLoginForm");
+      if (form?.elements.session_code) form.elements.session_code.value = "";
+      if (form?.elements.session_password) form.elements.session_password.value = "";
+    } else {
+      setSessionLoginResult(false, [result.detail || result.error || "登录未完成"]);
+      showToast(result.error || "登录未完成", "error");
+    }
+    renderSessionLogin(result.sessions ? result : await getJson("/api/sessions/telegram"));
+    return result;
+  } catch (error) {
+    setSessionLoginResult(false, [`登录失败：${error.message}`]);
+    showToast(`登录失败：${error.message}`, "error");
+    return { ok: false };
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+async function cancelSessionLogin() {
+  const stateData = await getJson("/api/sessions/telegram").catch(() => null);
+  const pending = stateData && (stateData.pending || [])[0];
+  if (!pending) return { ok: true };
+  try {
+    const result = await postJson("/api/sessions/telegram/cancel", { ticket: pending.ticket });
+    setSessionLoginResult(true, ["已取消登录"]);
+    renderSessionLogin(await getJson("/api/sessions/telegram"));
+    return result;
+  } catch (error) {
+    setSessionLoginResult(false, [`取消失败：${error.message}`]);
+    return { ok: false };
   }
 }
 

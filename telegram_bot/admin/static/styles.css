@@ -2896,3 +2896,42 @@ textarea:focus {
   border-color: #f3c3c9;
   color: #8c2333;
 }
+
+.session-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-files {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-file {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f9fc;
+  font-size: 13px;
+}
+
+.session-file em {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-file-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* [hidden] 一定要压过布局类的 display，否则 .field-row{display:grid} 会让隐藏的行照旧显示 */
+[hidden] {
+  display: none !important;
+}

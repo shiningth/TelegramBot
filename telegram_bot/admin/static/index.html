@@ -12,8 +12,8 @@
     <link rel="icon" href="/assets/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="stylesheet" href="/styles.css?v=20261120d" />
-    <link rel="stylesheet" href="/theme.css?v=20261120d" />
+    <link rel="stylesheet" href="/styles.css?v=20261122e" />
+    <link rel="stylesheet" href="/theme.css?v=20261122e" />
   </head>
   <body>
     <aside class="sidebar">
@@ -506,11 +506,7 @@
             <span id="ltxWatchSession" class="tag">会话检查中</span>
           </div>
           <p id="ltxWatchLast" class="hint">尚未运行</p>
-          <div class="magnet-form-lead">
-            <p class="hint">用独立用户会话（默认 <code>ltx_user</code>）读取频道，解析每条消息的 ed2k、番号、大小，按「番号 + ed2k」与 momo 比对后写入 <code>外部资源 / LTX破解</code>。</p>
-            <p class="hint">先勾「试运行」验证解析，再取消勾选开始入库。元数据按 DMM → AVbase → AVWikiDB → Jav321 → MGStage 的顺序取，封面和演员都拿到就停；JavDB 默认关闭（部分页面要登录）。缺封面会入库并记账，事后可跑 <code>scripts/repair_missing_covers.py</code> 补。</p>
-          </div>
-          <p class="hint">采集会话在「系统设置 → 用户会话」里登录（手机号 + 会话名 <code>ltx_user</code>，一次即可）；登录前先关掉这里的开关，否则会话文件被占用会报 <code>database is locked</code>。没有这个会话时日志会提示「LTX 采集会话不存在」，「会话」标签也会显示缺失。</p>
+          <p class="hint hint-strong"><strong>采集会话</strong>在「系统设置 → 用户会话」里登录（手机号 + 会话名 <code>ltx_user</code>，一次即可）；登录前先关掉这里的开关，否则会话文件被占用会报 <code>database is locked</code>。</p>
           <form id="ltxWatchSettingsForm" class="setting-form ai-setting-form magnet-form">
             <div class="field-row cols-2">
               <label class="inline-setting check-row"><span>试运行</span><input name="dry_run" type="checkbox"></label>
@@ -953,6 +949,6 @@
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
-    <script src="/app.js?v=20261120d"></script>
+    <script src="/app.js?v=20261122e"></script>
   </body>
 </html>

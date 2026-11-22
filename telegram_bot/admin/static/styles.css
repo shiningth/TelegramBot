@@ -800,6 +800,15 @@ canvas {
   line-height: 1.55;
 }
 
+.hint-strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.hint-strong code {
+  font-weight: 600;
+}
+
 .tag-row {
   display: flex;
   flex-wrap: wrap;

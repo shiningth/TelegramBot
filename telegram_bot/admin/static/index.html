@@ -510,17 +510,7 @@
             <p class="hint">用独立用户会话（默认 <code>ltx_user</code>）读取频道，解析每条消息的 ed2k、番号、大小，按「番号 + ed2k」与 momo 比对后写入 <code>外部资源 / LTX破解</code>。</p>
             <p class="hint">先勾「试运行」验证解析，再取消勾选开始入库。元数据按 DMM → AVbase → AVWikiDB → Jav321 → MGStage 的顺序取，封面和演员都拿到就停；JavDB 默认关闭（部分页面要登录）。缺封面会入库并记账，事后可跑 <code>scripts/repair_missing_covers.py</code> 补。</p>
           </div>
-          <details class="ltx-guide">
-            <summary>如何获取采集会话 <code>ltx_user.session</code>（只需一次）</summary>
-            <ol>
-              <li>打开 Portainer → 容器 <code>tgbot</code> → Console，或在 NAS 上 SSH 执行下面的命令</li>
-              <li><code>docker exec -it tgbot python /app/scripts/telegram_user_login.py</code></li>
-              <li>按提示输入手机号（含国家码，如 <code>+8613800138000</code>）</li>
-              <li>验证码会出现在 Telegram 里与「Telegram」官方账号的对话中，直接输入到终端</li>
-              <li>看到「登录成功」即生成 <code>/app/sessions/ltx_user.session</code>（宿主机 <code>…/telegrambot/sessions/</code>），重建容器不会丢</li>
-            </ol>
-            <p class="hint">缺少这个会话时，日志会提示「LTX 采集会话不存在」，「会话」标签也会显示缺失。</p>
-          </details>
+          <p class="hint">采集会话在「系统设置 → 用户会话」里登录（手机号 + 会话名 <code>ltx_user</code>，一次即可）；登录前先关掉这里的开关，否则会话文件被占用会报 <code>database is locked</code>。没有这个会话时日志会提示「LTX 采集会话不存在」，「会话」标签也会显示缺失。</p>
           <form id="ltxWatchSettingsForm" class="setting-form ai-setting-form magnet-form">
             <div class="field-row cols-2">
               <label class="inline-setting check-row"><span>试运行</span><input name="dry_run" type="checkbox"></label>

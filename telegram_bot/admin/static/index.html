@@ -12,8 +12,8 @@
     <link rel="icon" href="/assets/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="stylesheet" href="/styles.css?v=20261122e" />
-    <link rel="stylesheet" href="/theme.css?v=20261122e" />
+    <link rel="stylesheet" href="/styles.css?v=20261122g" />
+    <link rel="stylesheet" href="/theme.css?v=20261122g" />
   </head>
   <body>
     <aside class="sidebar">
@@ -506,7 +506,7 @@
             <span id="ltxWatchSession" class="tag">会话检查中</span>
           </div>
           <p id="ltxWatchLast" class="hint">尚未运行</p>
-          <p class="hint hint-strong"><strong>采集会话</strong>在「系统设置 → 用户会话」里登录（手机号 + 会话名 <code>ltx_user</code>，一次即可）；登录前先关掉这里的开关，否则会话文件被占用会报 <code>database is locked</code>。</p>
+          <p class="hint hint-strong"><strong>第一次用要先登录采集会话：</strong>去「系统设置 → 用户会话」，手机号填自己的、会话名填 <code>ltx_user</code>。登录前请先到「功能模块」页，把「频道自动导入」卡片右上角的开关关掉，登录成功后再打开——会话文件被两个程序同时打开会报 <code>database is locked</code>。</p>
           <form id="ltxWatchSettingsForm" class="setting-form ai-setting-form magnet-form">
             <div class="field-row cols-2">
               <label class="inline-setting check-row"><span>试运行</span><input name="dry_run" type="checkbox"></label>
@@ -914,7 +914,7 @@
             <div class="field-row">
               <div class="session-files" id="sessionFileList"></div>
             </div>
-            <p class="hint wide-field section-hint">验证码默认发到已登录的 Telegram 客户端（和「Telegram」官方账号的对话里，顶部就是登录码，不是短信）。同一个会话名不能同时被两个进程使用——登录采集会话前，请先在上面把「频道自动采集」的开关关掉；登录完再打开。</p>
+            <p class="hint wide-field section-hint">验证码默认发到已登录的 Telegram 客户端（和「Telegram」官方账号的对话里，顶部就是登录码，不是短信）。同一个会话文件不能被两个程序同时打开——如果这个名字正被模块使用，先到「功能模块」页关掉对应模块（如「频道自动导入」），登录成功后再打开。</p>
           </form>
         </section>
 
@@ -949,6 +949,6 @@
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
-    <script src="/app.js?v=20261122e"></script>
+    <script src="/app.js?v=20261122g"></script>
   </body>
 </html>

@@ -72,6 +72,8 @@ def make_message(*, name="x1080x_all_2026-10-09.csv", username="example_sender",
 def make_module(tmp_path: Path, importer=None, **overrides) -> MagnetImportModule:
     overrides.setdefault("watch_chats", [str(CHAT_ID)])
     overrides.setdefault("sender_usernames", ["example_sender"])
+    # 手动指令只认 manual_owner_ids；测试里的指令发送者是 123
+    overrides.setdefault("manual_owner_ids", [123])
     config = MagnetImportConfig(api_password="secret", **overrides)
     sleeps: list[float] = []
 
@@ -241,15 +243,16 @@ def test_download_rejects_size_mismatch(tmp_path: Path) -> None:
 
 
 class ManualClient(FakeClient):
-    def __init__(self, *, admin=False):
+    def __init__(self, *, admin=False, creator=False):
         super().__init__()
         self.admin = admin
+        self.creator = creator
 
     async def get_me(self):
         return SimpleNamespace(username="test_import_bot")
 
     async def get_permissions(self, chat_id, sender_id):
-        return SimpleNamespace(is_admin=self.admin, is_creator=False)
+        return SimpleNamespace(is_admin=self.admin, is_creator=self.creator)
 
 
 def make_command(reply=None, *, text="@test_import_bot 导入", sender_id=123):
@@ -315,16 +318,62 @@ def test_manual_missing_csv_explains_usage(tmp_path):
     assert all("CSV" in x["text"] for x in client.sent)
 
 
-def test_manual_without_allowlist_requires_group_admin(tmp_path):
-    for admin in [False, True]:
+def test_manual_without_owner_list_only_allows_group_creator(tmp_path):
+    """名单为空时只认群主：管理员也不行（授权名单对手动指令无效）。"""
+    for creator in [False, True]:
         importer = FakeImporter()
-        module = make_module(tmp_path / str(admin), importer, manual_only=True,
-                             sender_usernames=[], sender_ids=[], silent_denied=False)
-        client = ManualClient(admin=admin)
+        module = make_module(
+            tmp_path / str(creator),
+            importer,
+            manual_only=True,
+            sender_usernames=[],
+            sender_ids=[],
+            manual_owner_ids=[],
+            silent_denied=False,
+        )
+        client = ManualClient(admin=True, creator=creator)
         asyncio.run(_dispatch(module, make_command(make_message()), client))
-        assert len(importer.calls) == int(admin)
-        if not admin:
-            assert "管理员" in client.sent[0]["text"]
+        assert len(importer.calls) == int(creator)
+        if not creator:
+            assert "指定的管理员" in client.sent[0]["text"]
+
+
+def test_authorized_sender_cannot_trigger_manual_import(tmp_path):
+    """授权用户名 / 授权用户 ID 只对自动导入生效，不能手动触发。"""
+    importer = FakeImporter()
+    module = make_module(
+        tmp_path,
+        importer,
+        manual_only=True,
+        sender_ids=["123"],
+        sender_usernames=["example_sender"],
+        manual_owner_ids=[],
+    )
+    client = ManualClient(admin=True, creator=False)
+    for text in ("/导入", "@test_import_bot 导入"):
+        result = asyncio.run(_dispatch(module, make_command(make_message(), text=text), client))
+        assert result.status == "ignored", text
+    assert importer.calls == []
+    assert client.sent == []
+    assert module.card.metrics["denied"] == 2
+
+
+def test_manual_owner_list_overrides_authorized_sender(tmp_path):
+    importer = FakeImporter()
+    module = make_module(
+        tmp_path,
+        importer,
+        manual_only=True,
+        sender_ids=["123"],
+        sender_usernames=[],
+        manual_owner_ids=[999],
+    )
+    client = ManualClient(admin=True)
+    denied = asyncio.run(_dispatch(module, make_command(make_message(), sender_id=123), client))
+    assert denied.status == "ignored"
+    allowed = asyncio.run(_dispatch(module, make_command(make_message(), sender_id=999), client))
+    assert allowed.status == "handled"
+    assert len(importer.calls) == 1
 
 
 def test_unauthorized_command_is_silent_by_default(tmp_path):

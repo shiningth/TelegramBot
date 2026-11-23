@@ -112,14 +112,7 @@ class MagnetImportModule:
                 me = await client.get_me()
                 if str(getattr(me, "username", "") or "").casefold() != target.casefold():
                     return HandlerResult.ignored(self.card.id)
-            allowed = await self._sender_matches(message)
-            if not allowed and not self.config.sender_ids and not self.config.sender_usernames:
-                try:
-                    permissions = await client.get_permissions(int(chat_id), message.sender_id)
-                    allowed = bool(permissions.is_admin or permissions.is_creator)
-                except Exception:
-                    allowed = False
-            if not allowed:
+            if not await self._manual_allowed(client, message, chat_id):
                 if self.config.silent_denied:
                     self._note_denied(message)
                     return HandlerResult.ignored(self.card.id)
@@ -428,6 +421,24 @@ class MagnetImportModule:
         except re.error:
             logger.warning("Invalid magnet import file_name_pattern: %s", self.config.file_name_pattern)
             return False
+
+    async def _manual_allowed(self, client: Any, message: Any, chat_id: str) -> bool:
+        """手动指令的权限：只认 manual_owner_ids，留空时只认群 creator。
+
+        授权用户名 / 授权用户 ID 只对自动导入生效，不能用来手动触发导入。
+        """
+        owners = {int(item) for item in self.config.manual_owner_ids}
+        try:
+            sender_id = int(getattr(message, "sender_id", 0) or 0)
+        except (TypeError, ValueError):
+            sender_id = 0
+        if owners:
+            return sender_id in owners
+        try:
+            permissions = await client.get_permissions(int(chat_id), sender_id)
+        except Exception:
+            return False
+        return bool(getattr(permissions, "is_creator", False))
 
     async def _sender_matches(self, message: Any) -> bool:
         ids = {str(item).strip() for item in self.config.sender_ids if str(item).strip()}

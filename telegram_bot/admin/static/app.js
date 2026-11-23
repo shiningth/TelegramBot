@@ -1594,6 +1594,7 @@ function fillMagnetImportSettings(module, notice = "") {
     : "当前自动监听符合群、发送者和文件名规则的 CSV，上传后即触发导入。";
   setFormLines(form, "sender_usernames", config.sender_usernames || []);
   setFormLines(form, "sender_ids", config.sender_ids || []);
+  setFormLines(form, "manual_owner_ids", config.manual_owner_ids || []);
   setFormValue(form, "file_name_pattern", config.file_name_pattern || "^x1080x.*\\.csv$");
   setFormValue(form, "max_file_size_mb", config.max_file_size_mb ?? 2048);
   setFormValue(form, "download_retries", config.download_retries ?? 5);
@@ -1638,6 +1639,7 @@ function collectMagnetImportSettings() {
     manual_mention_commands: splitLines(form.elements.manual_mention_commands.value),
     sender_usernames: splitLines(form.elements.sender_usernames.value).map((item) => item.replace(/^@/, "")),
     sender_ids: splitLines(form.elements.sender_ids.value),
+    manual_owner_ids: splitLines(form.elements.manual_owner_ids.value),
     file_name_pattern: form.elements.file_name_pattern.value.trim(),
     max_file_size_mb: Number(form.elements.max_file_size_mb.value || 2048),
     download_retries: Number(form.elements.download_retries.value || 5),

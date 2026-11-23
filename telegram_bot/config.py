@@ -233,6 +233,9 @@ class MagnetImportConfig:
     watch_chats: list[str] = field(default_factory=list)
     sender_usernames: list[str] = field(default_factory=list)
     sender_ids: list[str] = field(default_factory=list)
+    # 手动指令（回复 CSV 发 /导入）只允许这些用户 ID；留空时只认群 creator。
+    # 授权用户名 / 授权用户 ID 只对自动导入生效，不能触发手动导入。
+    manual_owner_ids: list[int] = field(default_factory=list)
     file_name_pattern: str = r"^x1080x.*\.csv$"
     max_file_size_mb: int = 2048
     api_base_url: str = "http://127.0.0.1:8022"
@@ -252,7 +255,7 @@ class MagnetImportConfig:
         "预检：库里已有 {existing} 条，未上传\n"
         "导入：新增 {imported}，跳过 {skipped}，更新 {updated}，错误 {errors}"
     )
-    reply_denied_text: str = "仅群管理员或已授权用户可以触发导入。"
+    reply_denied_text: str = "只有指定的管理员可以手动触发导入。"
     reply_need_reply_text: str = "请回复一条 CSV 文件消息，再发送 {command}。"
     reply_not_csv_text: str = "回复的消息必须是符合文件名规则的 CSV 文件。"
     reply_duplicate_text: str = "这份文件正在处理或已经处理过，请查看导入记录。"
@@ -917,6 +920,20 @@ def magnet_import_config_from_dict(data: Any) -> MagnetImportConfig:
                 unique.append(item)
         return unique or list(getattr(defaults, key))
 
+    def _id_list(key: str) -> list[int]:
+        # 数字用户 ID 列表：丢弃非法项、去重保序；空列表表示「只认群主」
+        raw = data.get(key, getattr(defaults, key))
+        values: list[int] = []
+        if isinstance(raw, (list, tuple)):
+            for item in raw:
+                try:
+                    number = int(str(item).strip())
+                except (TypeError, ValueError):
+                    continue
+                if number and number not in values:
+                    values.append(number)
+        return values
+
     watch_chats = data.get("watch_chats")
     return MagnetImportConfig(
         manual_only=bool(data.get("manual_only", defaults.manual_only)),
@@ -928,6 +945,7 @@ def magnet_import_config_from_dict(data: Any) -> MagnetImportConfig:
             item.lstrip("@") for item in _clean_string_list(data.get("sender_usernames", defaults.sender_usernames))
         ],
         sender_ids=_clean_string_list(data.get("sender_ids", defaults.sender_ids)),
+        manual_owner_ids=_id_list("manual_owner_ids"),
         file_name_pattern=str(data.get("file_name_pattern") or defaults.file_name_pattern).strip(),
         max_file_size_mb=_int("max_file_size_mb", 1, 4096),
         api_base_url=str(data.get("api_base_url") or defaults.api_base_url).strip().rstrip("/"),

@@ -584,8 +584,11 @@
               <label class="stacked"><span>授权用户 ID（每行一个）</span><textarea name="sender_ids" rows="2"></textarea></label>
               <label class="stacked"><span>文件名正则</span><input name="file_name_pattern" type="text" placeholder="^x1080x.*\.csv$"></label>
             </div>
+            <div class="field-row cols-2">
+              <label class="stacked wide-field"><span>手动指令只允许这些用户 ID（每行一个；留空＝只有群主）</span><textarea name="manual_owner_ids" rows="2" placeholder="123456789"></textarea></label>
+            </div>
             <div class="magnet-form-lead">
-              <p class="hint">手动模式限制发指令的人，文件可以由其他人上传。仅允许自己时，只填自己的数字用户 ID，授权用户名留空；名单中任一项匹配即可。名单为空时，手动模式允许群主和管理员，自动模式不导入。</p>
+              <p class="hint">「授权用户名 / 授权用户 ID」只决定<strong>自动导入</strong>收谁的文件，不能手动触发。手动指令（回复 CSV 发 <code>/导入</code>）只认上面的「手动指令只允许」；那里留空时只认群主，管理员和授权用户都不行。</p>
               <p class="hint">勾选「非授权用户静默忽略」后，其他人发指令、<code>@机器人 导入</code> 都不会有任何回复，只在「拦截」计数里留痕。</p>
             </div>
             <div class="field-row cols-2">

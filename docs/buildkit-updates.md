@@ -10,6 +10,13 @@ The image includes the application, Python, dependencies, FFmpeg and OCR.
 BuildKit exports an image without the legacy parent image chain.
 requirements.lock preserves the installed Python dependency versions; update it intentionally when changing dependencies.
 The Python base digest is pinned in Dockerfile; update it intentionally for base image upgrades.
+## 2026.11.23.1
+
+- 手动指令（回复 CSV 发 `/导入`、`/import`、`@机器人 导入`）只认新配置 `magnet_import.manual_owner_ids`：留空时只允许群 creator，管理员与授权用户都不行。
+- 「授权用户名 / 授权用户 ID」从此只对**自动导入**生效，不再能触发手动导入；面板新增「手动指令只允许这些用户 ID」输入框与说明。
+- 非法 ID 自动丢弃、去重保序；默认拒绝文案改为「只有指定的管理员可以手动触发导入。」。
+- 测试：`test_authorized_sender_cannot_trigger_manual_import`、`test_manual_owner_list_overrides_authorized_sender`、`test_manual_without_owner_list_only_allows_group_creator`（原 allowlist-admin 用例改写）；全套 431 passed。
+
 The Dockerfile defaults the apt/PyPI sources to mirrors.tuna (deb.debian.org drops connections from this NAS); override with
 `--build-arg DEBIAN_MIRROR=https://deb.debian.org --build-arg PIP_INDEX_URL=https://pypi.org/simple` when building elsewhere.
 

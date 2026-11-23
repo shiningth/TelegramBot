@@ -356,6 +356,73 @@ def _trawl_scrape(
     return data if isinstance(data, dict) else {}
 
 
+_TURNSTILE_TOKEN_RE = re.compile(
+    r"""name=["']cf-turnstile-response["'][^>]*value=["']([^"']+)["']""", re.I
+)
+_TURNSTILE_TOKEN_RE2 = re.compile(
+    r"""value=["']([^"']+)["'][^>]*name=["']cf-turnstile-response["']""", re.I
+)
+_HIDDEN_INPUT_RE = re.compile(r"<input[^>]*type=[\"']hidden[\"'][^>]*>", re.I)
+
+
+def _turnstile_payload(html: str) -> dict[str, str]:
+    """从已解出 Turnstile 的页面里取出表单字段（token + 其它 hidden input）。
+
+    真浏览器解完验证后，页面里通常已经把 token 写进 `cf-turnstile-response`
+    的隐藏域；把它连同 hidden 字段一起 POST 出去，能确保签到请求真的发出，
+    而不是赌页面自己的 JS 回调会提交。
+    """
+    text = html or ""
+    token = ""
+    for pattern in (_TURNSTILE_TOKEN_RE, _TURNSTILE_TOKEN_RE2):
+        match = pattern.search(text)
+        if match:
+            token = html_lib.unescape(match.group(1)).strip()
+            if token:
+                break
+    if not token:
+        return {}
+    payload: dict[str, str] = {"cf-turnstile-response": token}
+    for tag in _HIDDEN_INPUT_RE.findall(text):
+        name = re.search(r"""name=["']([^"']+)["']""", tag, re.I)
+        value = re.search(r"""value=["']([^"']*)["']""", tag, re.I)
+        if not name:
+            continue
+        key = name.group(1)
+        if key in payload or key.startswith("cf-"):
+            continue
+        payload[key] = html_lib.unescape(value.group(1)) if value else ""
+    return payload
+
+
+def _submit_turnstile_form(
+    url: str,
+    html: str,
+    cookie: str,
+    user_agent: str,
+    *,
+    timeout: int = 40,
+) -> str:
+    """用取到的 Turnstile token 亲自 POST 一次签到表单，返回响应 HTML。"""
+    payload = _turnstile_payload(html)
+    if not payload:
+        return ""
+    headers = {"User-Agent": user_agent or DEFAULT_UA}
+    try:
+        with httpx.Client(
+            headers=headers,
+            cookies=parse_cookie(cookie),
+            follow_redirects=True,
+            timeout=timeout,
+        ) as client:
+            resp = client.post(url, data=payload)
+    except Exception:  # noqa: BLE001
+        return ""
+    if resp.status_code >= 400:
+        return ""
+    return resp.text or ""
+
+
 def _sign_via_browser(
     result: "SignResult",
     started: float,
@@ -400,6 +467,26 @@ def _sign_via_browser(
         if state == "login":
             result.detail = "Cookie 已失效，请重新复制"
             return _finish(result, started)
+        if state == "captcha":
+            # 真浏览器已经把 Turnstile 解出 token：直接带 token POST，别赌页面 JS 会自己提交
+            posted = _submit_turnstile_form(url, html, cookie, str(data.get("userAgent") or ""))
+            if posted:
+                _stash(result, posted)
+                result.page_text = page_text(posted)[:400]
+                st3, why3 = classify(
+                    posted,
+                    final_url=url,
+                    success_keywords=success_keywords,
+                    already_keywords=already_keywords,
+                )
+                if st3 in ("already", "signed") and not _stale_page(st3, result.dates, today):
+                    result.state = st3
+                    result.detail = why3 or ("今日已签到" if st3 == "already" else "签到成功")
+                    return _finish(result, started)
+                if st3 == "login":
+                    result.detail = "Cookie 已失效，请重新复制"
+                    return _finish(result, started)
+                state, why = st3, why3
 
     # 复核：不解验证、短超时，只为确认浏览器那趟是否其实已经签上了
     verify = _trawl_scrape(url, endpoint, cookie, min(timeout, 40), solve=False)

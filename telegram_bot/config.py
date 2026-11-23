@@ -345,6 +345,9 @@ class SiteCheckinConfig:
     timeout_seconds: int = 40
     # 日志保留天数，超期自动清理
     log_keep_days: int = 30
+    # 失败/待复核后隔多久重试；当天最多跑几次（PT 站 0 点重置常返回 500/验证码）
+    retry_failed_minutes: int = 40
+    max_attempts_per_day: int = 6
     # 需要过 Cloudflare 时填 FlareSolverr 地址（http://ip:8191）
     flaresolverr: str = ""
     notify_enabled: bool = True
@@ -1088,6 +1091,8 @@ def site_checkin_config_from_dict(data: Any) -> SiteCheckinConfig:
         poll_interval_seconds=_int("poll_interval_seconds", 10, 3600),
         timeout_seconds=_int("timeout_seconds", 10, 180),
         log_keep_days=_int("log_keep_days", 1, 365),
+        retry_failed_minutes=_int("retry_failed_minutes", 0, 720),
+        max_attempts_per_day=_int("max_attempts_per_day", 1, 20),
         flaresolverr=str(data.get("flaresolverr") or "").strip(),
         notify_enabled=bool(data.get("notify_enabled", defaults.notify_enabled)),
         notify_bot_token=str(data.get("notify_bot_token") or "").strip(),

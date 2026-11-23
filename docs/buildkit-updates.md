@@ -10,12 +10,12 @@ The image includes the application, Python, dependencies, FFmpeg and OCR.
 BuildKit exports an image without the legacy parent image chain.
 requirements.lock preserves the installed Python dependency versions; update it intentionally when changing dependencies.
 The Python base digest is pinned in Dockerfile; update it intentionally for base image upgrades.
-## 2026.11.23.1
+## 2026.11.24.1
 
-- 手动指令（回复 CSV 发 `/导入`、`/import`、`@机器人 导入`）只认新配置 `magnet_import.manual_owner_ids`：留空时只允许群 creator，管理员与授权用户都不行。
-- 「授权用户名 / 授权用户 ID」从此只对**自动导入**生效，不再能触发手动导入；面板新增「手动指令只允许这些用户 ID」输入框与说明。
-- 非法 ID 自动丢弃、去重保序；默认拒绝文案改为「只有指定的管理员可以手动触发导入。」。
-- 测试：`test_authorized_sender_cannot_trigger_manual_import`、`test_manual_owner_list_overrides_authorized_sender`、`test_manual_without_owner_list_only_allows_group_creator`（原 allowlist-admin 用例改写）；全套 431 passed。
+- 站点签到 Turnstile：真浏览器（TRAWL /scrape）解出 token 后，改用「取 token + 隐藏字段自己 POST 表单」，不再赌页面 JS 会自动提交——OurBits 0 点那次就是页面快照仍是解题前状态，被误判成「Turnstile 未通过」。
+- 新增 `_turnstile_payload()` / `_submit_turnstile_form()`；解题成功但未见结果时再走一次无解题复核，仍无结果才判 captcha。
+- `site_checkin` 新增 `retry_failed_minutes`（默认 40 分钟）与 `max_attempts_per_day`（默认 6）：失败/待复核状态当天自动重试，原来这两个值没人传 → 实际从不重试。
+- 测试：`test_turnstile_payload_reads_token_and_hidden_fields`、`test_turnstile_payload_is_empty_without_token`、`test_browser_solves_turnstile_then_posts_form_itself`；全套 434 passed。
 
 The Dockerfile defaults the apt/PyPI sources to mirrors.tuna (deb.debian.org drops connections from this NAS); override with
 `--build-arg DEBIAN_MIRROR=https://deb.debian.org --build-arg PIP_INDEX_URL=https://pypi.org/simple` when building elsewhere.
@@ -25,6 +25,13 @@ rebuild — recreate the tgbot container after the build (or update the stack im
 Keep pull_policy: never on this NAS; the image is built locally and only then pushed to Docker Hub.
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
+
+## 2026.11.23.1
+
+- 手动指令（回复 CSV 发 `/导入`、`/import`、`@机器人 导入`）只认新配置 `magnet_import.manual_owner_ids`：留空时只允许群 creator，管理员与授权用户都不行。
+- 「授权用户名 / 授权用户 ID」从此只对**自动导入**生效，不再能触发手动导入；面板新增「手动指令只允许这些用户 ID」输入框与说明。
+- 非法 ID 自动丢弃、去重保序；默认拒绝文案改为「只有指定的管理员可以手动触发导入。」。
+- 测试：`test_authorized_sender_cannot_trigger_manual_import`、`test_manual_owner_list_overrides_authorized_sender`、`test_manual_without_owner_list_only_allows_group_creator`（原 allowlist-admin 用例改写）；全套 431 passed。
 
 ## 2026.11.22.2
 

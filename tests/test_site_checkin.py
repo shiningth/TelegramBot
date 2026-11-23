@@ -649,3 +649,67 @@ def test_first_already_of_day_is_shown_as_success(tmp_path):
     )
     assert second["detail"].startswith("今日已签到")
 
+
+def test_turnstile_payload_reads_token_and_hidden_fields():
+    html = (
+        "<form method='POST' id='attendance'>"
+        "<input type='hidden' name='userId' id='myUserId' value='55922'>"
+        "<input type='hidden' name='cf-turnstile-response' value='tok-abc'>"
+        "</form>"
+    )
+    payload = sitecheckin._turnstile_payload(html)
+    assert payload["cf-turnstile-response"] == "tok-abc"
+    assert payload["userId"] == "55922"
+
+
+def test_turnstile_payload_is_empty_without_token():
+    assert sitecheckin._turnstile_payload('<div class="cf-turnstile" data-sitekey="x"></div>') == {}
+
+
+def test_browser_solves_turnstile_then_posts_form_itself(monkeypatch):
+    solved_html = (
+        "<form method='POST' id='attendance'>"
+        "<input type='hidden' name='userId' value='55922'>"
+        "<input type='hidden' name='cf-turnstile-response' value='tok-abc'>"
+        "</form>"
+    )
+    signed_html = (
+        "<table><tr><td class='text' id='stdmsg'>签到成功，这是您的第 1201 次签到，"
+        "已连续签到 4 天，本次签到获得 25 个魔力值</td></tr></table>"
+    )
+    seen = {}
+
+    def fake_scrape(url, endpoint, cookie, timeout, solve=True):
+        return {
+            "html": solved_html,
+            "captchasSolved": ["turnstile"],
+            "statusCode": 200,
+            "url": url,
+            "userAgent": "UA/1.0",
+        }
+
+    def fake_submit(url, html, cookie, user_agent, **kwargs):
+        seen["html"] = html
+        seen["ua"] = user_agent
+        return signed_html
+
+    monkeypatch.setattr(sitecheckin, "_trawl_scrape", fake_scrape)
+    monkeypatch.setattr(sitecheckin, "_submit_turnstile_form", fake_submit)
+    result = SignResult(state="unknown", detail="", http=0)
+    out = sitecheckin._sign_via_browser(
+        result,
+        0.0,
+        url="https://ourbits.club/attendance.php",
+        cookie="ourbits_jwt=x",
+        endpoint="http://127.0.0.1:8193",
+        timeout=30,
+        success_keywords="",
+        already_keywords="",
+        today="2026-11-24",
+    )
+    assert out.state == "signed"
+    assert "1201" in out.detail
+    assert seen["html"] == solved_html
+    assert seen["ua"] == "UA/1.0"
+
+

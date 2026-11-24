@@ -1,0 +1,47 @@
+# 一次性历史数据修复：把旧版镜像写坏的 magnet_hash 改回来。
+#
+# 症状：同一部片进不了第二个板块（CSV 导入「跳过」偏多、板块不完整），
+#     因为旧版 csv_prepare.py 把 magnet_hash 覆盖成 BT infohash，
+#     撞上 momo 的 uq_magnet_hash_source_site 唯一索引。
+#
+# 用法：把下面这段贴进你自己的 compose / Portainer 堆栈，改 3 个环境变量即可：
+#   MOMO_DB_PASSWORD   momo 的 Postgres 密码
+#   MOMO_DB_HOST       默认 momo-postgres（同网络）；不同网络就写宿主机 IP，MOMO_DB_PORT 写 25432
+#   MOMO_DB_USER       默认 postgres, MOMO_DB_NAME 默认 sehuatang_db
+# 每次 `docker compose up` 都会跑一次，幂等：跑完再跑就是「候选 0 行」。
+# 跑完可以把这个服务删掉（它 restart: "no"，不会常驻）。
+
+services:
+  magnet-hash-fix:
+    image: postgres:16-alpine
+    container_name: magnet-hash-fix
+    restart: "no"
+    environment:
+      PGHOST: ${MOMO_DB_HOST:-momo-postgres}
+      PGPORT: ${MOMO_DB_PORT:-5432}
+      PGUSER: ${MOMO_DB_USER:-postgres}
+      PGPASSWORD: ${MOMO_DB_PASSWORD:?请设置 MOMO_DB_PASSWORD}
+      PGDATABASE: ${MOMO_DB_NAME:-sehuatang_db}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "[magnet-hash-fix] 候选行："
+        psql -At -c "select count(*) from magnet_links where url like '%/resources/%' and magnet_hash ~ '^[0-9a-f]{40}\$'"
+        psql -v ON_ERROR_STOP=1 <<'SQL'
+        begin;
+        update magnet_links m
+        set magnet_hash = split_part(split_part(m.url, '/resources/', 2), '?', 1)
+        where m.url like '%/resources/%'
+          and m.magnet_hash ~ '^[0-9a-f]{40}$'
+          and not exists (
+            select 1 from magnet_links x
+            where x.source_site = m.source_site
+              and x.magnet_hash = split_part(split_part(m.url, '/resources/', 2), '?', 1)
+              and x.id <> m.id
+          );
+        commit;
+        SQL
+        echo "[magnet-hash-fix] 剩余候选行（应为 0）："
+        psql -At -c "select count(*) from magnet_links where url like '%/resources/%' and magnet_hash ~ '^[0-9a-f]{40}\$'"

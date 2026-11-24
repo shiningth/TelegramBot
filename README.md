@@ -84,7 +84,16 @@ services:
 
 ### 二、群内 CSV 导入
 
-上传前逐行按 `magnets` 重算 32 位文件哈希写回 `magnet_hash`，再用「番号 + 哈希」向 momo 预检；库里已有的行整行摘掉并计入回复里的 `{existing}`，剩下交给 momo 唯一键兜底。预检失败只记日志、不拦导入。
+上传前逐行按 `magnets` 算出磁链指纹，只用它做「番号 + 指纹」本地预检；**不改写 `magnet_hash`**（CSV 里是什么就存什么，空值才补）。库里已有的行整行摘掉并计入回复里的 `{existing}`，剩下交给 momo 唯一键兜底。预检失败只记日志、不拦导入。
+
+> 从 2026.11.24.2 之前的镜像升级：旧版会把 `magnet_hash` 覆盖成 BT infohash，撞上 momo 的 `uq_magnet_hash_source_site`，同一部片进不了第二个板块（CSV 导入「跳过」偏多）。新镜像不再写坏；已经写坏的历史行用一次性修复（幂等，跑完再跑就是 0 行）：
+>
+> ```yaml
+> # 贴进同一个 compose/Portainer 堆栈，填 MOMO_DB_PASSWORD 即可
+> # 完整片段见 scripts/fix-magnet-hash.compose.yml
+> ```
+>
+> 不想加服务就直接跑 SQL：`docker exec -i MOMO-POSTGRES psql -U postgres -d sehuatang_db -f scripts/fix_magnet_hash.sql`（默认只统计+回滚，把末尾 `rollback` 改 `commit` 才写入）。
 
 抓不到封面不会自动重试——momo 导入接口没有按行更新能力，重复提交只会新增重复行。事后补图：
 

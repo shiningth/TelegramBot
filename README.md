@@ -86,14 +86,22 @@ services:
 
 上传前逐行按 `magnets` 算出磁链指纹，只用它做「番号 + 指纹」本地预检；**不改写 `magnet_hash`**（CSV 里是什么就存什么，空值才补）。库里已有的行整行摘掉并计入回复里的 `{existing}`，剩下交给 momo 唯一键兜底。预检失败只记日志、不拦导入。
 
-> 从 2026.11.24.2 之前的镜像升级：旧版会把 `magnet_hash` 覆盖成 BT infohash，撞上 momo 的 `uq_magnet_hash_source_site`，同一部片进不了第二个板块（CSV 导入「跳过」偏多）。新镜像不再写坏；已经写坏的历史行用一次性修复（幂等，跑完再跑就是 0 行）：
+> **从 2026.11.24.2 之前的镜像升级**：旧版会把 `magnet_hash` 覆盖成 BT infohash，撞上 momo 的 `uq_magnet_hash_source_site`，同一部片进不了第二个板块（CSV 导入「跳过」偏多）。新镜像不再写坏；已经写坏的旧数据用下面这条命令修（幂等，跑完再跑就是「待修 0 行」，会先备份再改）：
 >
-> ```yaml
-> # 贴进同一个 compose/Portainer 堆栈，填 MOMO_DB_PASSWORD 即可
-> # 完整片段见 scripts/fix-magnet-hash.compose.yml
+> ```bash
+> # 在跑 momo 的那台机器上，一条命令（先预览，确认后加 --apply 真改）
+> docker exec -i momo-postgres sh -c 'cat > /tmp/fix.sh' < scripts/fix_magnet_hash.sh   # 或直接把脚本拷过去
+> bash fix_magnet_hash.sh            # 只数：待修多少行
+> bash fix_magnet_hash.sh --apply    # 改，并把备份取回到当前目录 magnet_hash_backup.csv
 > ```
 >
-> 不想加服务就直接跑 SQL：`docker exec -i MOMO-POSTGRES psql -U postgres -d sehuatang_db -f scripts/fix_magnet_hash.sql`（默认只统计+回滚，把末尾 `rollback` 改 `commit` 才写入）。
+> 不方便取脚本就等价于这条 SQL（容器名/库名按自己的改）：
+>
+> ```bash
+> docker exec -i momo-postgres psql -U postgres -d sehuatang_db -c "update magnet_links m set magnet_hash = split_part(split_part(m.url,'/resources/',2),'?',1) where m.url like '%/resources/%' and m.magnet_hash ~ '^[0-9a-f]{40}\$' and not exists (select 1 from magnet_links x where x.source_site=m.source_site and x.magnet_hash=split_part(split_part(m.url,'/resources/',2),'?',1) and x.id<>m.id)"
+> ```
+>
+> 想让它「每次部署自动跑一次」，把 `scripts/fix-magnet-hash.compose.yml` 里的服务加进堆栈（只需填 `MOMO_DB_PASSWORD`）。
 
 抓不到封面不会自动重试——momo 导入接口没有按行更新能力，重复提交只会新增重复行。事后补图：
 

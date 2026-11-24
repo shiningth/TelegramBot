@@ -1,11 +1,15 @@
-"""上传前的 CSV 整理：磁链指纹规范化 + 按番号预检库里已有记录。
+"""上传前的 CSV 整理：磁链指纹 + 按番号预检库里已有记录。
 
-momo 只按 `magnet_hash` 字符串判重，而库里 1908 行是数字占位哈希（sehuatang thread id），
-外部 CSV 里也常见占位/空哈希 —— 只靠 momo 静默跳过，会出现「同一部片子重复入库」。
-上传前先做两件事：
+momo 只按 `magnet_hash` 字符串判重，而库里这一列有三种风格：数字 thread id、帖子 slug
+（1080xin 的 `/resources/<slug>`）、文件哈希（ed2k md4-32 / BT sha1-40）。上游 CSV 里也
+常见占位或空哈希，只靠 momo 静默跳过会出现「同一部片子重复入库」。
 
-1. 每行按 `magnets` 里的磁链重算 32 位文件哈希写回 `magnet_hash`（ed2k 的 hash / BT 的 btih）；
-2. 用「番号 + 哈希」向 momo 预检，把库里已经存在的行整行摘掉，并数出来告诉调用方。
+上传前做两件事：
+
+1. 为每行算一个「番号 + 磁链指纹」，预检时用它跟库里的哈希比对；`magnet_hash` 只在
+   空值时补上指纹，**绝不覆盖**已有值 —— 覆盖成 infohash 会撞上
+   `(magnet_hash, source_site)` 唯一索引，让同一磁力再也进不了别的板块；
+2. 用「番号 + 指纹」向 momo 预检，把库里已经存在的行整行摘掉，并数出来告诉调用方。
 
 预检失败（登录不上、接口报错）不阻断导入：记一条日志，剩下的交给 momo 自己判重。
 """
@@ -171,7 +175,10 @@ def prepare_csv(
             for row in csv.DictReader(handle_again):
                 link = first_link(row.get("magnets"))
                 fingerprint = magnet_fingerprint(link) if link else ""
-                if fingerprint and fingerprint != str(row.get("magnet_hash") or "").strip():
+                if fingerprint and not str(row.get("magnet_hash") or "").strip():
+                    # 只补空哈希：momo 的 magnet_hash 有数字 ID / 帖子 slug / 文件哈希三种风格，
+                    # 官方数据（如 1080xin 的 4K超清）存的就是资源 slug，改写它会和白名单里
+                    # (magnet_hash, source_site) 的唯一索引打架，导致同一磁力无法进第二个板块。
                     row["magnet_hash"] = fingerprint
                     result.normalized += 1
                 keep = True

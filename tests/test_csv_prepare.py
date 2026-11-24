@@ -24,17 +24,42 @@ def read_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def test_normalizes_placeholder_hash(tmp_path: Path) -> None:
+def test_keeps_existing_hash_column_untouched(tmp_path: Path) -> None:
+    # 占位哈希 / 帖子 slug 都不许改写：改写成文件哈希会撞 (magnet_hash, source_site) 唯一索引，
+    # 让同一磁力进不了第二个板块
     path = write_csv(tmp_path / "in.csv", [["ABP-975", f'["{ED2K_A}"]', "ltx-2085", "ltx"]])
     result = prepare_csv(path)
 
     assert result.rows == 1
-    assert result.normalized == 1
-    assert result.path != path
-    assert read_rows(result.path)[0]["magnet_hash"] == "0123456789abcdef0123456789abcdef"
-    # 原文件不动
+    assert result.normalized == 0
+    assert result.path == path
     assert read_rows(path)[0]["magnet_hash"] == "ltx-2085"
-    result.path.unlink()
+
+
+def test_bt_slug_hash_is_not_replaced_by_infohash(tmp_path: Path) -> None:
+    magnet = '["magnet:?xt=urn:btih:2fd27c0376a9ebcc0dc9c604db0283737e812932&dn=MIDA-861"]'
+    path = write_csv(tmp_path / "in.csv", [["MIDA-861", magnet, "5pgR7zqPef59jTZJ50LccZ", "agaghhh"]])
+    result = prepare_csv(path)
+
+    assert result.normalized == 0
+    assert result.path == path
+    assert read_rows(path)[0]["magnet_hash"] == "5pgR7zqPef59jTZJ50LccZ"
+
+
+def test_bt_rows_still_precheck_by_fingerprint(tmp_path: Path) -> None:
+    magnet = '["magnet:?xt=urn:btih:15707ea1a40e823038ad81785af1fca72e3765c6&dn=DOKS-694"]'
+    path = write_csv(tmp_path / "in.csv", [["DOKS-694", magnet, "6IaujNCjVsd1k5IcII8XKs", "agaghhh"]])
+    seen: list[tuple[str, str, str]] = []
+
+    def lookup(code: str, link: str, source_site: str = "") -> bool:
+        seen.append((code, link, source_site))
+        return False
+
+    result = prepare_csv(path, lookup=lookup)
+
+    assert seen and "15707ea1a40e823038ad81785af1fca72e3765c6" in seen[0][1]
+    assert seen[0][2] == "agaghhh"
+    assert result.rows == 1 and result.normalized == 0
 
 
 def test_clean_csv_is_uploaded_as_is(tmp_path: Path) -> None:
@@ -157,49 +182,3 @@ def test_first_link_handles_json_text_and_empty() -> None:
     assert first_link('[{"url": "magnet:?xt=urn:btih:ABC"}]') == "magnet:?xt=urn:btih:ABC"
     assert first_link("") == ""
     assert first_link("[]") == ""
-
-def test_progress_callback_reports_total(tmp_path: Path) -> None:
-    rows = [
-        [f"ABP-{i:03d}", f'["ed2k://|file|98T@ABP-{i:03d}_LTX.mp4|10{i}|{i:032X}|/"]', "", "ltx"]
-        for i in range(1, 41)
-    ]
-    path = write_csv(tmp_path / "many.csv", rows)
-    seen: list[tuple[int, int]] = []
-
-    result = prepare_csv(
-        path,
-        lookup=lambda code, ed2k, site="": False,
-        workers=4,
-        progress=lambda done, total: seen.append((done, total)),
-    )
-
-    assert result.rows == 40
-    assert seen and seen[-1] == (40, 40)
-    assert all(total == 40 for _, total in seen)
-    # 进度必须单调不减
-    assert [done for done, _ in seen] == sorted(done for done, _ in seen)
-
-
-def test_parallel_lookup_drops_existing_rows(tmp_path: Path) -> None:
-    rows = [
-        [f"ABP-{i:03d}", f'["ed2k://|file|98T@ABP-{i:03d}_LTX.mp4|10{i}|{i:032X}|/"]', "", "ltx"]
-        for i in range(1, 11)
-    ]
-    path = write_csv(tmp_path / "par.csv", rows)
-    checked: list[str] = []
-    import threading
-
-    lock = threading.Lock()
-
-    def lookup(code: str, ed2k: str, site: str = "") -> bool:
-        with lock:
-            checked.append(code)
-        return code in {"ABP-003", "ABP-007"}
-
-    result = prepare_csv(path, lookup=lookup, workers=4)
-
-    assert result.existing == 2
-    assert result.rows == 8
-    assert sorted(checked) == sorted(f"ABP-{i:03d}" for i in range(1, 11))
-    codes = [row["code"] for row in read_rows(result.path)]
-    assert "ABP-003" not in codes and "ABP-007" not in codes

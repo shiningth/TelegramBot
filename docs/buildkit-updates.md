@@ -1,3 +1,10 @@
+## 2026.11.24.2
+
+- **CSV 导入不再改写 `magnet_hash`**：此前为排重把每行 `magnet_hash` 覆盖成磁链指纹（BT 行全变 40 位 infohash），撞上 momo 的 `uq_magnet_hash_source_site`，同一磁力无法进入第二个板块——实例 `x1080x_fidagaghhh__hd_cracked` 160 行只进 92，68 条因 infohash 已在「无码HD」被挡。现在只补空值。
+- momo 的 `magnet_hash` 本就多风格（数字 thread id / 帖子 slug / ed2k md4-32 / BT sha1-40），1080xin 的 CSV 自带资源 slug，保留原值才能跨板块各存一份；指纹只用于「番号 + 指纹」本地预检，BT 行（`btih:` 40 位）也能正确预检。
+- 测试：`tests/test_csv_prepare.py` 改为「保留原值」用例并新增 BT slug 回归 3 例，全套 434 passed。
+- 数据修复：`高清破解` 92 行的 `magnet_hash` 由 infohash 改回 slug（备份 `/tmp/bk_update.txt`），重导后补入 68 条，板块现 160 行、0 重复。
+
 # TelegramBot image updates
 
 Build directory: /vol3/1000/SSD/github/TelegramBot/TelegramBot-main

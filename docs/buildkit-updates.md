@@ -1,10 +1,3 @@
-## 2026.11.24.2
-
-- **CSV 导入不再改写 `magnet_hash`**：此前为排重把每行 `magnet_hash` 覆盖成磁链指纹（BT 行全变 40 位 infohash），撞上 momo 的 `uq_magnet_hash_source_site`，同一磁力无法进入第二个板块——实例 `x1080x_fidagaghhh__hd_cracked` 160 行只进 92，68 条因 infohash 已在「无码HD」被挡。现在只补空值。
-- momo 的 `magnet_hash` 本就多风格（数字 thread id / 帖子 slug / ed2k md4-32 / BT sha1-40），1080xin 的 CSV 自带资源 slug，保留原值才能跨板块各存一份；指纹只用于「番号 + 指纹」本地预检，BT 行（`btih:` 40 位）也能正确预检。
-- 测试：`tests/test_csv_prepare.py` 改为「保留原值」用例并新增 BT slug 回归 3 例，全套 434 passed。
-- 数据修复：`高清破解` 92 行的 `magnet_hash` 由 infohash 改回 slug（备份 `/tmp/bk_update.txt`），重导后补入 68 条，板块现 160 行、0 重复。
-
 # TelegramBot image updates
 
 Build directory: /vol3/1000/SSD/github/TelegramBot/TelegramBot-main
@@ -17,13 +10,6 @@ The image includes the application, Python, dependencies, FFmpeg and OCR.
 BuildKit exports an image without the legacy parent image chain.
 requirements.lock preserves the installed Python dependency versions; update it intentionally when changing dependencies.
 The Python base digest is pinned in Dockerfile; update it intentionally for base image upgrades.
-## 2026.11.24.1
-
-- 站点签到 Turnstile：真浏览器（TRAWL /scrape）解出 token 后，改用「取 token + 隐藏字段自己 POST 表单」，不再赌页面 JS 会自动提交——OurBits 0 点那次就是页面快照仍是解题前状态，被误判成「Turnstile 未通过」。
-- 新增 `_turnstile_payload()` / `_submit_turnstile_form()`；解题成功但未见结果时再走一次无解题复核，仍无结果才判 captcha。
-- `site_checkin` 新增 `retry_failed_minutes`（默认 40 分钟）与 `max_attempts_per_day`（默认 6）：失败/待复核状态当天自动重试，原来这两个值没人传 → 实际从不重试。
-- 测试：`test_turnstile_payload_reads_token_and_hidden_fields`、`test_turnstile_payload_is_empty_without_token`、`test_browser_solves_turnstile_then_posts_form_itself`；全套 434 passed。
-
 The Dockerfile defaults the apt/PyPI sources to mirrors.tuna (deb.debian.org drops connections from this NAS); override with
 `--build-arg DEBIAN_MIRROR=https://deb.debian.org --build-arg PIP_INDEX_URL=https://pypi.org/simple` when building elsewhere.
 
@@ -33,91 +19,16 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
-## 2026.11.23.1
+## 2026.11.25.1
 
-- 手动指令（回复 CSV 发 `/导入`、`/import`、`@机器人 导入`）只认新配置 `magnet_import.manual_owner_ids`：留空时只允许群 creator，管理员与授权用户都不行。
-- 「授权用户名 / 授权用户 ID」从此只对**自动导入**生效，不再能触发手动导入；面板新增「手动指令只允许这些用户 ID」输入框与说明。
-- 非法 ID 自动丢弃、去重保序；默认拒绝文案改为「只有指定的管理员可以手动触发导入。」。
-- 测试：`test_authorized_sender_cannot_trigger_manual_import`、`test_manual_owner_list_overrides_authorized_sender`、`test_manual_without_owner_list_only_allows_group_creator`（原 allowlist-admin 用例改写）；全套 431 passed。
-
-## 2026.11.22.2
-
-- 面板「系统设置 → 用户会话」：手机号 + 会话名就能登录用户账号（频道采集、定时签到共用），不用再进容器跑脚本；支持验证码、两步验证密码、取消、刷新，列出已登录的 `.session` 文件。
-- 登录过程先写临时文件 `<名字>.<ticket>.session`，登录成功才改名为 `<名字>.session`；失败或取消直接删掉——避免失败的会话文件被当成「已登录」。
-- FloodWait 等错误翻成中文：`Telegram 要求等待 15.2 小时 才能再请求验证码（短时间请求多次）…`，另含手机号无效/被封、验证码错误/过期、两步验证密码错误、api_id 无效等提示。
-- 会话文件被模块占用时报「database is locked」→ 面板提示先在对应模块关掉开关（频道采集前必须关）。
-- 修 CSS 覆盖问题：`theme.css` 里 `.field-row > label { display: grid !important }` 会压掉 `hidden` 属性，隐藏的验证码行仍显示；改为内联 `display:none !important` + 全局 `[hidden]{display:none!important}`。
-- 新增 `telegram_bot/shared/session_login.py`（`SessionLoginManager`、`normalize_phone`、`safe_session_name`、`mask_phone`、`_login_error_text`），`app.py` 七个方法，路由 `GET /api/sessions/telegram` 与 `POST /api/sessions/telegram/{code,verify,password,cancel}`。
-- 测试：新增 `tests/test_session_login.py` 17 例（手机号归一、会话名防穿越、打码、临时文件不计入列表、失败不留 session、ticket 过期、缺凭证、无 loop 兜底）；全套 429 passed。
-
-## 2026.11.22.1
-
-- 面板「系统设置 → Telegram 凭证」：api_id / api_hash / Bot Token 三项直接在网页里填，密文只回显掩码（留空或含 `***` 表示保持原值），保存后凭证或开关有变化会自动停掉再连，不用重启容器；面板标明 `TGBOT_TELEGRAM_*` 环境变量优先。
-- 「测试凭证」按钮：先做纯本地格式检查（三项全对才发网络请求），再用 `getMe` 验 bot token、用 `help.getConfig`（MemorySession）验 api_id/api_hash；只做无副作用探测，不写 session、不触发登录码、不发消息。
-- 新增 `telegram_bot/shared/tgcheck.py`（`check_formats` / `check_bot_token` / `check_api_credentials`）、`botapi.get_me()`、`app.telegram_settings_snapshot()` / `update_telegram_settings()` / `test_telegram_settings()`；路由 `GET|PUT /api/settings/telegram`、`POST /api/settings/telegram/test`（始终 200，前端按 `ok` 渲染）。
-- `TelegramAdapter` 记录 `username`，面板可直接显示机器人自己的 @用户名与连接状态。
-- 测试：新增 `tests/test_telegram_settings.py` 9 例（掩码不回显、留空不覆盖、无变更不重连、格式错不联网、空值回落已存凭证），全套 412 passed。
-
-## 2026.11.20.3
-
-- 站点签到详情更好读：结果里带上「本次获得 N 个魔力值」「连续 N 天」。
-  - OurBits 不再显示「您今天已经签到过了，请勿重复刷新」这种二次签到文案，改为「今日已签到 · 本次获得 105 个魔力值（连续 9 天）」。
-  - 当天第一次跑出 already（说明这一轮刚签上）时展示为「签到成功…」，内部状态仍记 already，不影响当天补试/去重逻辑。
-- 实现：`SignResult.bonus` 新字段；`_bonus_amount()` 支持 `(签到已得N)`、`本次签到获得 N 个魔力值`、`获得 N 个魔力值` 三种写法；模块 `_record()` 按日志算连续天数并写进 detail/entry。
-- 顺手修正今天 OurBits 那条历史记录文本。
-- 新增 4 个用例（bonus 解析、already 展示、signed 追加、连续天数、当天首条判成功）。
-
-## 2026.11.20.2
-
-- 移动端（≤920px）修复与优化：桌面端 `.shell{margin-left:248px}` 在窄屏未归零，把内容挤成 64px 一条 —— 已在 `theme.css` 移动端媒体查询里覆盖为 0；表单/卡片/字段全部单列，卡片头部与站点信息不再撑破屏幕（`min-width:0` + `site-last` 允许换行）。
-- 底部导航居中收窄（`min(92vw,372px)`）、压扁（导航项 46px、图标 20px、标签 9.5px），子菜单同步居中。
-- 服务控制按钮在窄屏保留文字；标题允许换行；日志与表格容器内横向滚动。
-- 回复模板去掉「magnet_hash 改为文件 MD4 {normalized} 行」，改为「校对 / 预检 / 导入」三行；自动导入与手动导入共用同一套统计（`reply_text` / `manual_success_text` 默认值同步更新）。
-- 测试：399 passed。
-
-## 2026.11.20.1
-
-- magnet_import：手动指令（回复 CSV 发 `/导入`）在任何模式下都生效；`manual_only` 只控制「非指令消息是否走自动导入」，自动模式仍按 `file_name_pattern` + 授权用户过滤。
-- 自动导入的完成回复改用与手动一致的模板（校对 / 预检 / 导入四行统计），模板在面板 `reply_text` 可改。
-- 前端静态资源加版本号（`/app.js?v=`、`/styles.css?v=`、`/theme.css?v=`），避免浏览器缓存旧脚本导致图标与样式显示异常。
-- 测试：399 passed。
-
-## 2026.11.18.1
-
-- 0ff 在 11-18 00:01 报「滑动认证未通过：滑块脚本里没有找到验证地址」：0 点重置高峰时站点返回的 slide_check 脚本里没有 set_access_token 地址，属服务端抖动。
-- `sitecheckin._solve_slider` 改为最多 3 次重试，每次重新取签到页（滑块脚本名与 token 每次都会变），并绕过缓存。
-- 滑块彻底解不开且配了 FlareSolverr/TRAWL 时，自动降级到 `_sign_via_browser` 真浏览器兜底，不再直接判失败。
-- `site_checkin._RETRY_STATES` 增加 `slider`：滑块失败也纳入当天补试（20 分钟后再试，当天最多 3 次），此前只有 failed/pending/unknown/captcha/timeout 会补试，滑块失败整天不重试。
-- 新增 3 个单测（滑块脚本无 token 时重试成功、滑块失败回落浏览器、is_due 认可 slider 状态），全套 396 passed。
-
-## 2026.11.17.1
-
-- 修复「0 点整签到失败后再也不重试」：滑块通过后的第二次请求原先直接 `client.get()`，绕过了 `_get_with_retry()`，于是 00:01 的 500 一次性判死（实测 2843ms 就失败，detail 却写「已重试 3 次」。现在该处也走重试，文案改为「站点返回 HTTP 500（0 点重置高峰常出现，稍后会自动再试）」，`_get_with_retry()` 默认 4 次 / 10 秒。
-- 新增当天补试：`is_due()` 增加 `last_state/attempts_today/retry_minutes/max_attempts`，站点当天跑过但状态属 `failed/pending/unknown/captcha/timeout` 时，距上次满 20 分钟且当天次数 < 3 会再跑一次；`SiteCheckinConfig` 新增 `retry_failed_minutes=20`、`max_attempts_per_day=3`，`state.logs` 按站点+日期计数。
-- 实测：11-17 重启后 09:43 自动补签到成功（pt.0ff.cc 第 1213 次、连续 1196 天、+1000 魔力）。
-- 测试：新增 `test_is_due_retries_failed_site_same_day`，`test_get_reports_5xx_after_retries` 断言随文案调整，全套 394 passed。
-
-## 2026.11.16.1
-
-- 站点签到 GET 加自动重试：新增 `_get_with_retry()`，遇到 5xx 或连接错误隔 10 秒重试，最多 4 次；PT 站每天 0 点重置签到，00:01 那一分钟经常直接 500。重试后仍失败才记失败，detail 写明「站点返回 HTTP 500（已重试 3 次，多为整点重置高峰）」。
-- 背景：11-16 00:01 pt.0ff.cc 返回 HTTP 500 被判失败，00:47 手动重跑即签到成功（第 1212 次）。
-- 测试 +2（5xx 后恢复、重试用尽报错），全套 393 passed。
-
-## 2026.11.15.2
-
-- 修正 pt.0ff.cc（Farmm）签到方式：该站打开 `attendance.php` 即完成当日签到，之前把它配成 `attendanceRetroactive`（补签接口）会消耗补签卡 → 改为 `method="get"`，并清空 sign_url / post_data。
-- 硬拦截：`sign_site` 发现 `post_data` 里出现 `attendanceRetroactive` 时直接判失败并说明「补签接口已跳过，避免消耗补签卡」，不再提交。
-- 滑块在 `method="get"` 下也会解（原来只有 auto/slider 会解，导致 get 模式报「页面没有找到签到入口」）。
-- 日志 detail 更清楚：`今日已签（第 1211 次 · 日历已标记今日）`。
-- 测试 +2（get 模式先过滑块再判结果、补签接口被拒），全套 391 passed。
-
-## 2026.11.15.1
-
-- 站点签到新增 `method="quiz"`：北洋园PT（tjupt.org）这类「给一张影片封面 + 6 个片名选项」的答题式签到。
-- 题库 `runtime/data/site_checkin_quiz.json` 存「封面 md5 → 正确片名」；命中就选同名单选按钮并 POST，未命中只换题、绝不猜（答错会被扣魔力），换满 8 次仍没有就记「题库里没有当前封面」。
-- 题库来源：同一封面反复出现、选项随机，取多次选项集合的交集反推答案；累计 440 道题 / 48 张封面，45 张已唯一确定。
-- `site_checkin.py` 新增 `load_quiz_table / _quiz_options / _quiz_pick / _sign_via_quiz`，`sign_site(..., quiz_table=...)` 新参数，模块自动取状态文件同目录的题库；面板「方式」下拉加「答题（看图选片名）」。
-- 测试 +4（题库读取容错、选项解析与挑名、命中提交、未知封面不提交），全套 389 passed。
+- 新增「网络代理」：`config.json` 的 `network` 段 + 面板「系统设置 → 网络代理」（开关 / 代理地址 / 「Telegram 连接走代理」「网页抓取走代理」两个勾选 / 例外清单 / 测试代理）。默认全直连，什么都不填时行为与之前完全一致。
+- 新增 `telegram_bot/shared/netproxy.py`：`configure()` / `client_for(target)` / `client_external()` / `telethon_proxy()` / `direct_ip()` / `test_proxy()`。局域网（momo、FlareSolverr、TRAWL、私网 IP、无点主机名）强制直连，不受代理影响。
+- 出口改造：Telethon 4 处（机器人适配器、频道采集、面板登录用户会话、凭证自检）传 `proxy=`；httpx 全部改走 `netproxy`（botapi / javdb 全链路 / sitecheckin / magnetboard / ltx_watch 通知）。
+- 「测试代理」同时给出**代理出口 IP 与直连出口 IP**：两个不同才算真的换了出口，相同则告警「可能是透明代理，或代理只做转发不换 IP」。
+- 环境变量可给初始值：`TGBOT_PROXY_URL` / `TGBOT_NO_PROXY` / `TGBOT_PROXY_ENABLED`（面板已保存的值优先）。
+- 依赖：`requirements.txt` / `requirements.lock` 增加 `python-socks[asyncio]`、`socksio`（`socks5://` 需要它们；`http://` 代理无需新依赖）。
+- 接口：`GET /api/settings/network`、`PUT /api/settings/network`、`POST /api/settings/network/test`。
+- 测试：新增 `tests/test_netproxy.py`（22 例：地址解析/掩码、私网与 CIDR 例外、client_for 是否带 proxy、telethon 元组、面板保存与掩码保留、出口对照与告警、直连探测失败回落），全套 456 passed。
 
 ## 2026.11.12.4
 
@@ -254,5 +165,5 @@ Verify container health, /login and authenticated admin functionality after depl
 
 Initial version: telegrambot:2026.10.28-buildkit.1
 Rollback version: telegrambot:rollback-20261028
-Backup directory: /home/user/telegrambot/backups/buildkit-20261028
+Backup directory: /home/shiningth/telegrambot/backups/buildkit-20261028
 The stable alias denotes the last version verified during this migration; it is not updated automatically by the build script.

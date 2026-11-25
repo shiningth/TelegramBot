@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from telegram_bot.config import TelegramConfig
+from telegram_bot.shared import netproxy
 
 logger = logging.getLogger(__name__)
 MessageCallback = Callable[[Any], Awaitable[None]]
@@ -137,7 +138,12 @@ class TelegramAdapter:
         session_dir.mkdir(parents=True, exist_ok=True)
         session_path = session_dir / self.config.session_name
 
-        self.client = TelegramClient(str(session_path), self.config.api_id, self.config.api_hash)
+        self.client = TelegramClient(
+            str(session_path),
+            self.config.api_id,
+            self.config.api_hash,
+            proxy=netproxy.telethon_proxy(),
+        )
         self._install_programmatic_message_tracking()
 
         @self.client.on(events.NewMessage)

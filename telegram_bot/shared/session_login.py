@@ -10,6 +10,8 @@ import logging
 import re
 import time
 import uuid
+
+from telegram_bot.shared import netproxy
 from pathlib import Path
 from typing import Any
 
@@ -130,7 +132,7 @@ class SessionLoginManager:
         ticket = uuid.uuid4().hex[:12]
         tmp_path = self.sessions_dir / f"{name}.{ticket}.session"
         final_path = self.sessions_dir / f"{name}.session"
-        client = TelegramClient(str(tmp_path), int(api_id), api_hash)
+        client = TelegramClient(str(tmp_path), int(api_id), api_hash, proxy=netproxy.telethon_proxy())
         try:
             await client.connect()
             sent = await client.send_code_request(number)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .admin import AdminServer
-from .config import AIProviderConfig, AppConfig, telegram_env_names
+from .config import AIProviderConfig, AppConfig, network_env_names, telegram_env_names
 from .jobs import ChatHistoryBackfillJob
 from .logging_setup import RecentLogBuffer, configure_logging
 from .modules import ModuleRegistry, create_default_registry
@@ -19,6 +19,7 @@ from .persistence import ChatHistoryStore
 from .runtime import RuntimeMetrics, ensure_runtime_dirs, system_snapshot
 from .telegram import TelegramAdapter
 from .usage import build_ai_usage_stats
+from .shared import netproxy
 from .shared.checkin_sender import PersonalCheckinSender
 from .shared.session_login import SessionLoginManager
 from .shared.tgcheck import check_api_credentials, check_bot_token, check_formats
@@ -63,6 +64,7 @@ class TelegramBotApplication:
     def __init__(self, config: AppConfig, config_path: Path) -> None:
         self.config = config
         self.config_path = config_path
+        netproxy.configure(config.network)
         self.project_root = Path(__file__).resolve().parents[1]
         self.metrics = RuntimeMetrics()
         self.chat_history = ChatHistoryStore(config.chat_history, self.project_root)
@@ -400,6 +402,74 @@ class TelegramBotApplication:
             "connected": bool(self.telegram.connected),
             "bot_username": str(self.telegram.username or ""),
         }
+
+    # ------------------------------------------------------------------
+    # 出网代理（面板「系统设置 → 网络代理」）
+    # ------------------------------------------------------------------
+    def network_settings_snapshot(self) -> dict[str, Any]:
+        net = self.config.network
+        return {
+            "enabled": bool(net.enabled),
+            "proxy": netproxy.mask_proxy_url(net.proxy_url) if net.proxy_url else "",
+            "has_proxy": bool(net.proxy_url),
+            "no_proxy": list(net.no_proxy),
+            "proxy_for_telegram": bool(net.proxy_for_telegram),
+            "proxy_for_web": bool(net.proxy_for_web),
+            "active": bool(net.active()),
+            "env_override": network_env_names(),
+        }
+
+    def update_network_settings(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        if isinstance(payload.get("network"), dict):
+            payload = payload["network"]
+        net = self.config.network
+        changed: list[str] = []
+
+        raw_url = str(payload.get("proxy_url") or "").strip()
+        if raw_url and "***" not in raw_url and raw_url != net.proxy_url:
+            if netproxy.parse_proxy_url(raw_url) is None:
+                raise ValueError("代理地址无法解析，例：http://127.0.0.1:7890 或 socks5://user:pass@host:1080")
+            net.proxy_url = raw_url
+            changed.append("proxy_url")
+
+        for field in ("enabled", "proxy_for_telegram", "proxy_for_web"):
+            if field in payload:
+                value = bool(payload.get(field))
+                if value != getattr(net, field):
+                    setattr(net, field, value)
+                    changed.append(field)
+
+        if "no_proxy" in payload:
+            raw = payload.get("no_proxy")
+            if isinstance(raw, list):
+                items = [str(item).strip() for item in raw if str(item).strip()]
+            else:
+                items = [line.strip() for line in str(raw).replace(",", "\n").splitlines() if line.strip()]
+            if items != list(net.no_proxy):
+                net.no_proxy = items
+                changed.append("no_proxy")
+
+        if not changed:
+            return {**self.network_settings_snapshot(), "changed": [], "restarting": False}
+
+        self.config.save(self.config_path)
+        netproxy.configure(net)
+        restarting = bool(net.enabled and net.proxy_url)
+        if restarting:
+            # 代理变了旧连接还挂在老出口上，重连一次
+            self._schedule_telegram_restart()
+        logger.info("代理设置由面板更新：changed=%s 生效=%s", changed, net.active())
+        return {**self.network_settings_snapshot(), "changed": changed, "restarting": restarting}
+
+    def test_network_proxy(self, values: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = values if isinstance(values, dict) else {}
+        url = str(payload.get("proxy_url") or "").strip()
+        if not url or "***" in url:
+            url = self.config.network.proxy_url
+        if not url:
+            return {"ok": False, "error": "还没填代理地址"}
+        return netproxy.test_proxy(url)
 
     # ------------------------------------------------------------------
     # 用户会话登录（面板「系统设置 → 用户会话」）

@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable
 
 from telegram_bot.config import LtxWatchConfig, MagnetImportConfig, TelegramConfig
 from telegram_bot.shared.contracts import HandlerResult
+from telegram_bot.shared import netproxy
 from telegram_bot.shared.javdb import code_variants, fetch_meta, search_detail_by_code
 from telegram_bot.shared.magnetboard_api import find_existing_sync, import_rows_sync, summarize_import_result
 
@@ -500,7 +501,12 @@ class LtxWatchModule:
         session = self._session_path()
         if not Path(str(session) + ".session").is_file():
             raise RuntimeError(f"LTX 采集会话不存在：{session}.session，请先登录")
-        client = TelegramClient(str(session), self.telegram.api_id, self.telegram.api_hash)
+        client = TelegramClient(
+            str(session),
+            self.telegram.api_id,
+            self.telegram.api_hash,
+            proxy=netproxy.telethon_proxy(),
+        )
         await client.connect()
         if not await client.is_user_authorized():
             await client.disconnect()
@@ -591,7 +597,7 @@ class LtxWatchModule:
         if not chat_id:
             raise RuntimeError("缺少接收用的 chat_id")
         url = f"https://api.telegram.org/bot{self.config.notify_bot_token}/sendMessage"
-        with httpx.Client(timeout=20.0) as client:
+        with netproxy.client_for(url, timeout=20.0) as client:
             response = client.post(url, json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
         try:
             data = response.json()

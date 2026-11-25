@@ -121,7 +121,7 @@ async def test_send_code_requires_credentials(tmp_path: Path) -> None:
 class _BoomClient:
     """send_code_request 直接炸，模拟被 Telegram 限流。"""
 
-    def __init__(self, path: str, api_id: int, api_hash: str) -> None:
+    def __init__(self, path: str, api_id: int, api_hash: str, **kwargs: Any) -> None:
         self.path = Path(path)
 
     async def connect(self) -> None:

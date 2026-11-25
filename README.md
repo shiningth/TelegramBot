@@ -133,6 +133,16 @@ python3 scripts/repair_missing_covers.py --limit 50  # 默认每 10 秒一条
 
 同一个 `.session` 不能被两个进程同时打开：登录采集会话前，先在「频道自动采集」里把开关关掉，登录完再打开，否则会报 `database is locked`。
 
+## 网络代理
+
+服务器连不上 Telegram、或抓不到 JavDB / DMM / AVbase 时，在「系统设置 → 网络代理」填一个代理即可，不用改 compose：
+
+- 代理地址支持 `http://host:port`（Clash 的混合端口就是这个）和 `socks5://user:pass@host:1080`；`socks5` 需要 2026.11.25 之后的镜像（含 `python-socks` / `socksio`）。
+- 两个勾选分别控制「Telegram 连接」和「网页抓取」是否走代理，可以只给其中一个走。
+- **局域网永远直连**：momo、FlareSolverr、TRAWL 以及 `192.168.*` / `10.*` / 无点主机名都自动绕过代理，不会被代理绕进去。
+- **测试代理** 会同时显示「代理出口 IP」和「直连出口 IP」：两个 IP 不同才说明真的换了出口；相同会提示「可能是透明代理，或代理只做转发不换 IP」。
+- 也可以只在 compose 里给初始值：`TGBOT_PROXY_URL`、`TGBOT_NO_PROXY`、`TGBOT_PROXY_ENABLED`（面板保存过的值优先于环境变量）。
+
 ## 数据目录与凭据
 
 | 路径 | 内容 |

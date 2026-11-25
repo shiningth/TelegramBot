@@ -12,8 +12,8 @@
     <link rel="icon" href="/assets/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="stylesheet" href="/styles.css?v=20261123a" />
-    <link rel="stylesheet" href="/theme.css?v=20261123a" />
+    <link rel="stylesheet" href="/styles.css?v=20261125a" />
+    <link rel="stylesheet" href="/theme.css?v=20261125a" />
   </head>
   <body>
     <aside class="sidebar">
@@ -885,6 +885,39 @@
         <section class="panel settings-panel">
           <div class="panel-head">
             <div>
+              <h2>网络代理</h2>
+              <p class="hint">服务器连不上 Telegram、或抓不到文件站时再填。能直连就保持关闭；局域网里的 momo、FlareSolverr、TRAWL 永远直连，不会被代理绕进去。</p>
+            </div>
+            <div class="group-actions">
+              <button id="testNetworkProxy" type="button">测试代理</button>
+              <button id="saveNetworkProxy" class="primary" type="button">保存</button>
+            </div>
+          </div>
+          <form id="networkProxyForm" class="magnet-form" autocomplete="off">
+            <div class="field-row">
+              <label class="check-row"><input type="checkbox" name="proxy_enabled" /><span>启用代理</span></label>
+            </div>
+            <div class="field-row">
+              <label class="stacked wide-field"><span>代理地址</span><input name="proxy_url" type="text" autocomplete="off" placeholder="http://192.168.1.2:7890  或  socks5://user:pass@host:1080"></label>
+            </div>
+            <div class="field-row cols-2">
+              <label class="check-row"><input type="checkbox" name="proxy_for_telegram" /><span>Telegram 连接走代理</span></label>
+              <label class="check-row"><input type="checkbox" name="proxy_for_web" /><span>网页抓取走代理</span></label>
+            </div>
+            <div class="field-row">
+              <label class="stacked wide-field"><span>例外（直连，每行一个；支持 192.168.0.0/16 这种网段）</span><textarea name="no_proxy" rows="3" spellcheck="false" placeholder="localhost&#10;127.0.0.1&#10;192.168.0.0/16&#10;.lan"></textarea></label>
+            </div>
+            <div class="field-row">
+              <div id="networkProxyState" class="telegram-creds-state">尚未读取状态</div>
+            </div>
+            <div id="networkProxyResult" class="telegram-creds-result" hidden></div>
+            <p class="hint wide-field section-hint">「测试代理」会经代理访问一次 ipinfo，把出口 IP 和国家显示出来——能显示国家就说明代理通。也可以只在 compose 里写 <code>TGBOT_PROXY_URL</code> / <code>TGBOT_NO_PROXY</code> / <code>TGBOT_PROXY_ENABLED</code> 三个环境变量，这里保存过的值优先于环境变量。</p>
+          </form>
+        </section>
+
+        <section class="panel settings-panel">
+          <div class="panel-head">
+            <div>
               <h2>用户会话</h2>
               <p class="hint">频道自动采集、定时签到要用个人账号登录。这里登录一次就行，不用再进容器敲脚本。</p>
             </div>
@@ -952,6 +985,6 @@
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
-    <script src="/app.js?v=20261123a"></script>
+    <script src="/app.js?v=20261125a"></script>
   </body>
 </html>

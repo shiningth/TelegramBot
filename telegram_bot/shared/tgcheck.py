@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 
+from telegram_bot.shared import netproxy
 from telegram_bot.shared.botapi import get_me
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ async def _probe_api(api_id: int, api_hash: str) -> None:
         connection_retries=1,
         request_retries=1,
         timeout=10,
+        proxy=netproxy.telethon_proxy(),
     )
     await client.connect()
     try:

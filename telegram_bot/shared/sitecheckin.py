@@ -21,6 +21,8 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from telegram_bot.shared import netproxy
+
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -409,7 +411,7 @@ def _submit_turnstile_form(
         return ""
     headers = {"User-Agent": user_agent or DEFAULT_UA}
     try:
-        with httpx.Client(
+        with netproxy.client_for(url,
             headers=headers,
             cookies=parse_cookie(cookie),
             follow_redirects=True,
@@ -605,7 +607,7 @@ def _sign_via_quiz(
         return _finish(result, started)
 
     missing: list[str] = []
-    with httpx.Client(
+    with netproxy.client_for(url,
         cookies=parse_cookie(cookie), headers=headers, timeout=timeout, follow_redirects=True
     ) as client:
         for _ in range(max(1, tries)):
@@ -774,7 +776,7 @@ def sign_site(
         )
 
     try:
-        with httpx.Client(
+        with netproxy.client_for(url,
             headers=req_headers,
             cookies=cookies,
             timeout=timeout,

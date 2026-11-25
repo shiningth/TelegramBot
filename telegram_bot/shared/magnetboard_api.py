@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from telegram_bot.shared import netproxy
 from telegram_bot.shared.net import ensure_http_url
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ def import_csv_sync(
     base = ensure_http_url(base_url).rstrip("/")
     # 上传/导入耗时随文件大小增长，读超时放宽到 timeout；连接超时保持较短
     client_timeout = httpx.Timeout(timeout, connect=15.0)
-    with httpx.Client(timeout=client_timeout, follow_redirects=False) as client:
+    with netproxy.client_for(base, timeout=client_timeout, follow_redirects=False) as client:
         login = client.post(
             f"{base}/api/auth/login",
             json={"username": username, "password": password, "remember_me": False},
@@ -144,7 +145,7 @@ def find_existing_sync(
     wanted = magnet_fingerprint(ed2k)
     if not code or not wanted:
         return None
-    with httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0), follow_redirects=False) as client:
+    with netproxy.client_for(base, timeout=httpx.Timeout(timeout, connect=10.0), follow_redirects=False) as client:
         headers = _login(base, username, password, client)
         response = client.get(
             f"{base}/api/magnets",
@@ -219,7 +220,8 @@ class ExistingLookup:
             if self._client is None:
                 import httpx
 
-                client = httpx.Client(
+                client = netproxy.client_for(
+                    self._base,
                     timeout=httpx.Timeout(self._timeout, connect=10.0),
                     follow_redirects=False,
                 )

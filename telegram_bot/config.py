@@ -568,11 +568,38 @@ class AIConfig:
     image: AIImageConfig = field(default_factory=AIImageConfig)
 
 
+DEFAULT_NO_PROXY = [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    ".local",
+    ".lan",
+]
+
+
+@dataclass
+class NetworkConfig:
+    """出网代理。默认直连——透明代理/直连环境什么都不用填。"""
+
+    enabled: bool = False
+    proxy_url: str = ""
+    no_proxy: list[str] = field(default_factory=lambda: list(DEFAULT_NO_PROXY))
+    proxy_for_telegram: bool = True
+    proxy_for_web: bool = True
+
+    def active(self) -> bool:
+        return bool(self.enabled and self.proxy_url.strip())
+
+
 @dataclass
 class AppConfig:
     project_name: str = "TelegramBot"
     version: str = "0.1.0"
     admin: AdminConfig = field(default_factory=AdminConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     logs: LogConfig = field(default_factory=LogConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -624,6 +651,7 @@ class AppConfig:
             project_name=data.get("project_name", cls.project_name),
             version=data.get("version", cls.version),
             admin=AdminConfig(**data.get("admin", {})),
+            network=network_config_from_dict(data.get("network", {})),
             telegram=TelegramConfig(**data.get("telegram", {})),
             logs=LogConfig(**data.get("logs", {})),
             runtime=RuntimeConfig(**data.get("runtime", {})),
@@ -712,6 +740,55 @@ _TELEGRAM_ENV_KEYS = (
 def telegram_env_names() -> list[str]:
     """面板里提示用：哪些 Telegram 凭证被环境变量接管了（环境变量优先于面板）。"""
     return [name for name in _TELEGRAM_ENV_KEYS if os.getenv(name) not in (None, "")]
+
+
+_NETWORK_ENV_KEYS = ("TGBOT_PROXY_URL", "TGBOT_NO_PROXY", "TGBOT_PROXY_ENABLED")
+
+
+def network_env_names() -> list[str]:
+    return [name for name in _NETWORK_ENV_KEYS if os.getenv(name) not in (None, "")]
+
+
+def network_config_from_dict(data: Any) -> NetworkConfig:
+    """解析 network 段；配置为空时回落到环境变量（方便只在 compose 里写三行）。"""
+    data = data if isinstance(data, dict) else {}
+
+    proxy_url = str(data.get("proxy_url") or "").strip()
+    from_env = False
+    if not proxy_url:
+        proxy_url = str(os.getenv("TGBOT_PROXY_URL") or "").strip()
+        from_env = bool(proxy_url)
+
+    raw_list = data.get("no_proxy")
+    if isinstance(raw_list, str):
+        no_proxy = [item.strip() for item in raw_list.replace(",", "\n").splitlines() if item.strip()]
+    elif isinstance(raw_list, list):
+        no_proxy = [str(item).strip() for item in raw_list if str(item).strip()]
+    else:
+        no_proxy = []
+    if not no_proxy:
+        env_no_proxy = str(os.getenv("TGBOT_NO_PROXY") or "")
+        if env_no_proxy.strip():
+            no_proxy = [item.strip() for item in env_no_proxy.replace(",", "\n").splitlines() if item.strip()]
+    if not no_proxy:
+        no_proxy = list(DEFAULT_NO_PROXY)
+
+    if os.getenv("TGBOT_PROXY_ENABLED") not in (None, ""):
+        enabled = bool(_coerce_env_value(str(os.getenv("TGBOT_PROXY_ENABLED"))))
+    elif from_env:
+        enabled = True
+    elif "enabled" in data:
+        enabled = bool(data.get("enabled"))
+    else:
+        enabled = bool(proxy_url)
+
+    return NetworkConfig(
+        enabled=enabled,
+        proxy_url=proxy_url,
+        no_proxy=no_proxy,
+        proxy_for_telegram=bool(data.get("proxy_for_telegram", True)),
+        proxy_for_web=bool(data.get("proxy_for_web", True)),
+    )
 
 
 def _apply_env_overrides(config: dict[str, Any]) -> None:

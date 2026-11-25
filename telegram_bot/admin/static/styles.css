@@ -1870,6 +1870,11 @@ button.danger {
 .group-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.group-actions button {
+  white-space: nowrap;
 }
 
 .group-summary {

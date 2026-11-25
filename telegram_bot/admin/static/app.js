@@ -175,6 +175,10 @@ document.getElementById("testTelegramCreds").addEventListener("click", () => {
   void testTelegramSettings();
 });
 bindSaveButton("saveTelegramCreds", saveTelegramSettings, "Telegram 凭证已保存");
+document.getElementById("testNetworkProxy").addEventListener("click", () => {
+  void testNetworkProxy();
+});
+bindSaveButton("saveNetworkProxy", saveNetworkSettings, "代理设置已保存");
 document.getElementById("refreshSessions").addEventListener("click", () => {
   void loadSessionLogin();
 });
@@ -384,6 +388,7 @@ function prepareView(viewId) {
   }
   if (viewId === "settings") {
     void loadTelegramSettings();
+    void loadNetworkSettings();
     void loadSessionLogin();
   }
   if (viewId === "aiUsage") refreshAiUsage();
@@ -2746,8 +2751,141 @@ async function testTelegramSettings() {
 }
 
 // ---------------------------------------------------------------- 用户会话登录
-async function loadSessionLogin() {
-  const label = document.getElementById("sessionLoginState");
+const DEFAULT_NO_PROXY_LINES = ["localhost", "127.0.0.1", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", ".local", ".lan"];
+
+function networkProxyStateText(data) {
+  if (!data) return "尚未读取状态";
+  const parts = [];
+  if (Array.isArray(data.env_override) && data.env_override.length) {
+    parts.push(`环境变量 ${data.env_override.join(" / ")} 也在生效`);
+  }
+  if (data.active) parts.push(`代理已启用 ${data.proxy || ""}`.trim());
+  else if (data.enabled) parts.push("已勾选启用，但没填代理地址");
+  else parts.push("当前直连");
+  if (data.active) {
+    const scopes = [];
+    if (data.proxy_for_telegram) scopes.push("Telegram");
+    if (data.proxy_for_web) scopes.push("网页抓取");
+    parts.push(scopes.length ? `${scopes.join("、")}走代理` : "两项都关着，等于不生效");
+  }
+  parts.push(`例外 ${(data.no_proxy || []).length} 条`);
+  return parts.join(" · ");
+}
+
+function fillNetworkSettings(data) {
+  const form = document.getElementById("networkProxyForm");
+  if (!form) return;
+  form.elements.proxy_enabled.checked = Boolean(data && data.enabled);
+  const urlInput = form.elements.proxy_url;
+  urlInput.value = "";
+  urlInput.placeholder = data && data.has_proxy ? `已保存 ${data.proxy}（留空不改）` : "http://192.168.1.2:7890";
+  form.elements.proxy_for_telegram.checked = !data || data.proxy_for_telegram !== false;
+  form.elements.proxy_for_web.checked = !data || data.proxy_for_web !== false;
+  const lines = (data && Array.isArray(data.no_proxy) && data.no_proxy.length ? data.no_proxy : DEFAULT_NO_PROXY_LINES);
+  form.elements.no_proxy.value = lines.join("\n");
+  const label = document.getElementById("networkProxyState");
+  if (label) label.textContent = networkProxyStateText(data);
+}
+
+function collectNetworkSettings() {
+  const form = document.getElementById("networkProxyForm");
+  const payload = {
+    enabled: Boolean(form.elements.proxy_enabled.checked),
+    proxy_for_telegram: Boolean(form.elements.proxy_for_telegram.checked),
+    proxy_for_web: Boolean(form.elements.proxy_for_web.checked),
+    no_proxy: form.elements.no_proxy.value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean),
+  };
+  const url = form.elements.proxy_url.value.trim();
+  if (url) payload.proxy_url = url;
+  return payload;
+}
+
+async function loadNetworkSettings() {
+  const label = document.getElementById("networkProxyState");
+  try {
+    const data = await getJson("/api/settings/network");
+    fillNetworkSettings(data);
+    return data;
+  } catch (error) {
+    if (label) label.textContent = `读取失败：${error.message}`;
+    return null;
+  }
+}
+
+function setNetworkProxyResult(ok, lines) {
+  const box = document.getElementById("networkProxyResult");
+  if (!box) return;
+  box.hidden = false;
+  box.classList.remove("ok", "bad");
+  box.classList.add(ok ? "ok" : "bad");
+  box.innerHTML = "";
+  lines.forEach((line) => {
+    const row = document.createElement("div");
+    row.textContent = line;
+    box.appendChild(row);
+  });
+}
+
+async function saveNetworkSettings() {
+  const result = await putJson("/api/settings/network", { network: collectNetworkSettings() });
+  fillNetworkSettings(result);
+  const changed = Array.isArray(result.changed) ? result.changed : [];
+  if (!changed.length) {
+    setNetworkProxyResult(true, ["已保存（设置没有变化）。"]);
+  } else if (result.restarting) {
+    setNetworkProxyResult(true, [`已保存并重连 Telegram（${changed.join(" / ")}）`, "几秒后刷新页面即可看到最新连接状态。"]);
+  } else {
+    setNetworkProxyResult(true, [`已保存（${changed.join(" / ")}）`, "当前是直连；需要走代理时勾上「启用代理」。"]);
+  }
+  return { ok: true };
+}
+
+async function testNetworkProxy() {
+  const button = document.getElementById("testNetworkProxy");
+  const original = button ? button.textContent : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "测试中…";
+  }
+  try {
+    const payload = collectNetworkSettings();
+    const result = await postJson("/api/settings/network/test", { proxy_url: payload.proxy_url || "" });
+    if (result.ok) {
+      const lines = [
+        `✅ 代理可用，用时 ${result.elapsed_ms} ms`,
+        `出口 IP：${result.ip || "未知"}${result.country ? `（${result.country}${result.city ? " " + result.city : ""}）` : ""}`,
+      ];
+      if (result.org) lines.push(`运营商 / 机房：${result.org}`);
+      if (result.direct_ip) {
+        if (result.egress_changed) {
+          lines.push(`直连出口：${result.direct_ip} → 走代理后变成上面的 IP，代理确实生效`);
+        } else {
+          lines.push(`⚠️ 直连出口也是 ${result.direct_ip}，说明这次请求没真正换出口（可能是透明代理，或代理只做转发不做换 IP）`);
+        }
+      }
+      setNetworkProxyResult(true, lines);
+      showToast(result.egress_changed === false ? "代理可用，但出口没变" : "代理测试通过", result.egress_changed === false ? "warn" : "success");
+    } else {
+      setNetworkProxyResult(false, [`❌ ${result.error || "代理不可用"}`, "检查地址、端口、账号密码，以及代理服务是否允许这台机器连。"]);
+      showToast("代理测试没通过", "error");
+    }
+    return result;
+  } catch (error) {
+    setNetworkProxyResult(false, [`测试失败：${error.message}`]);
+    showToast(`测试失败：${error.message}`, "error");
+    return { ok: false };
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+async function loadSessionLogin() {  const label = document.getElementById("sessionLoginState");
   try {
     const data = await getJson("/api/sessions/telegram");
     renderSessionLogin(data);

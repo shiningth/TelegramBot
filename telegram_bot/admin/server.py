@@ -238,6 +238,8 @@ class AdminServer:
                     self._json(app.settings_snapshot())
                 elif parsed.path == "/api/settings/telegram":
                     self._json(app.telegram_settings_snapshot())
+                elif parsed.path == "/api/settings/network":
+                    self._json(app.network_settings_snapshot())
                 elif parsed.path == "/api/sessions/telegram":
                     self._json(app.session_login_state())
                 elif parsed.path == "/api/groups":
@@ -299,6 +301,8 @@ class AdminServer:
                     self._json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
                 elif parsed.path == "/api/settings/telegram/test":
                     self._json(app.test_telegram_settings(self._body_json()))
+                elif parsed.path == "/api/settings/network/test":
+                    self._json(app.test_network_proxy(self._body_json()))
                 elif parsed.path == "/api/sessions/telegram/code":
                     self._json(app.start_session_login(self._body_json()))
                 elif parsed.path == "/api/sessions/telegram/verify":
@@ -317,6 +321,13 @@ class AdminServer:
                 elif parsed.path == "/api/settings/telegram":
                     try:
                         result = app.update_telegram_settings(body)
+                    except ValueError as exc:
+                        self._json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                        return
+                    self._json({"ok": True, **result})
+                elif parsed.path == "/api/settings/network":
+                    try:
+                        result = app.update_network_settings(body)
                     except ValueError as exc:
                         self._json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
                         return

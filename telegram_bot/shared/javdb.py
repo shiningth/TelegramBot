@@ -12,6 +12,8 @@ import time
 from typing import Any
 from urllib.parse import quote, unquote
 
+from telegram_bot.shared import netproxy
+
 logger = logging.getLogger(__name__)
 
 _UA = (
@@ -61,7 +63,7 @@ def fetch_via_flaresolverr(url: str, endpoint: str, *, timeout: float = 90.0) ->
 
     body = {"cmd": "request.get", "url": url, "maxTimeout": int(timeout * 1000)}
     try:
-        with httpx.Client(timeout=timeout + 15, follow_redirects=True) as client:
+        with netproxy.client_for(endpoint, timeout=timeout + 15, follow_redirects=True) as client:
             response = client.post(endpoint.rstrip("/") + "/v1", json=body)
         payload = response.json()
     except Exception as exc:  # noqa: BLE001
@@ -101,7 +103,7 @@ def _javdb_meta(
                 if client is not None:
                     response = client.get(url, headers={"User-Agent": _UA}, timeout=timeout)
                 else:
-                    with httpx.Client(follow_redirects=True) as own:
+                    with netproxy.client_for(url, follow_redirects=True) as own:
                         response = own.get(url, headers={"User-Agent": _UA}, timeout=timeout)
                 if response.status_code == 403:
                     _mark_javdb_blocked()
@@ -294,7 +296,7 @@ def fetch_dmm_cover(code: str, *, timeout: float = 15.0, client: Any = None) -> 
     own_client = None
     try:
         if client is None:
-            own_client = httpx.Client(follow_redirects=True, timeout=timeout)
+            own_client = netproxy.client_external(follow_redirects=True, timeout=timeout)
             client = own_client
 
         def _try(cid: str) -> str:
@@ -419,7 +421,7 @@ def fetch_dmm_meta(code: str, *, timeout: float = 15.0, client: Any = None) -> d
     }
     try:
         if client is None:
-            own = httpx.Client(follow_redirects=True, timeout=timeout)
+            own = netproxy.client_external(follow_redirects=True, timeout=timeout)
             client = own
         try:
             response = client.get(
@@ -545,7 +547,7 @@ def _fetch_jav321(*, code: str = "", timeout: float = 12.0, client: Any = None, 
     slug = slugs[0]
     try:
         if client is None:
-            own = httpx.Client(follow_redirects=True, timeout=timeout)
+            own = netproxy.client_external(follow_redirects=True, timeout=timeout)
             client = own
         for candidate in slugs:
             url = "%s/video/%s" % (_JAV321_BASE, candidate)

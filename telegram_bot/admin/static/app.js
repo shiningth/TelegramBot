@@ -2854,12 +2854,14 @@ async function testNetworkProxy() {
     const payload = collectNetworkSettings();
     const result = await postJson("/api/settings/network/test", { proxy_url: payload.proxy_url || "" });
     if (result.ok) {
-      const lines = [
-        `✅ 代理可用，用时 ${result.elapsed_ms} ms`,
-        `出口 IP：${result.ip || "未知"}${result.country ? `（${result.country}${result.city ? " " + result.city : ""}）` : ""}`,
-      ];
+      const lines = [`✅ 代理可用，用时 ${result.elapsed_ms} ms`];
+      if (result.ip) {
+        lines.push(`出口 IP：${result.ip}${result.country ? `（${result.country}${result.city ? " " + result.city : ""}）` : ""}`);
+      } else if (result.note) {
+        lines.push(result.note);
+      }
       if (result.org) lines.push(`运营商 / 机房：${result.org}`);
-      if (result.direct_ip) {
+      if (result.ip && result.direct_ip) {
         if (result.egress_changed) {
           lines.push(`直连出口：${result.direct_ip} → 走代理后变成上面的 IP，代理确实生效`);
         } else {

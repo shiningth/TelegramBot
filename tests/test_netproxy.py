@@ -280,3 +280,175 @@ def test_direct_ip_returns_blank_on_failure(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(netproxy.httpx, "Client", _Boom)
     assert netproxy.direct_ip() == ""
+
+
+def test_test_proxy_parses_cloudflare_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _CfResp:
+        status_code = 200
+        text = "fl=123f\nh=www.cloudflare.com\nip=9.8.7.6\nloc=SG\n"
+
+    class _CfClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "_CfClient":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def get(self, url: str) -> Any:
+            assert "cloudflare.com/cdn-cgi/trace" in url
+            return _CfResp()
+
+    monkeypatch.setattr(netproxy.httpx, "Client", _CfClient)
+    monkeypatch.setattr(netproxy, "direct_ip", lambda **_kwargs: "1.2.3.4")
+    result = netproxy.test_proxy("http://127.0.0.1:7890")
+    assert result["ok"] is True
+    assert result["ip"] == "9.8.7.6"
+    assert result["country"] == "SG"
+    assert result["probe"] == "cloudflare"
+    assert result["egress_changed"] is True
+
+
+def test_test_proxy_falls_back_on_429_to_next_ip_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        def __init__(self, code: int, data: dict[str, str] | None = None) -> None:
+            self.status_code = code
+            self._data = data or {}
+            self.text = ""
+
+        def json(self) -> dict[str, str]:
+            return self._data
+
+    class _FallbackClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "_FallbackClient":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def get(self, url: str) -> _Resp:
+            if "cloudflare.com" in url:
+                return _Resp(429)
+            if "ip.sb" in url:
+                return _Resp(200, {"ip": "203.0.113.5", "country_code": "JP", "city": "Osaka", "organization": "ExampleNet"})
+            return _Resp(429)
+
+    monkeypatch.setattr(netproxy.httpx, "Client", _FallbackClient)
+    monkeypatch.setattr(netproxy, "direct_ip", lambda **_kwargs: "1.2.3.4")
+    result = netproxy.test_proxy("http://127.0.0.1:7890")
+    assert result["ok"] is True
+    assert result["ip"] == "203.0.113.5"
+    assert result["country"] == "JP"
+    assert result["probe"] == "ip.sb"
+    assert result["egress_changed"] is True
+
+
+def test_test_proxy_succeeds_via_connectivity_probe_when_all_ip_sources_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        def __init__(self, code: int) -> None:
+            self.status_code = code
+            self.text = ""
+
+        def json(self) -> dict[str, str]:
+            return {}
+
+    class _ConnOnlyClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "_ConnOnlyClient":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def get(self, url: str) -> _Resp:
+            if "generate_204" in url:
+                return _Resp(204)
+            return _Resp(429)
+
+    monkeypatch.setattr(netproxy.httpx, "Client", _ConnOnlyClient)
+    result = netproxy.test_proxy("http://127.0.0.1:7890")
+    assert result["ok"] is True
+    assert result["ip"] == ""
+    assert result["probe"] == "Google 204"
+    assert "egress_changed" not in result
+    assert "连通性" in result["note"]
+
+
+def test_client_telegram_follows_telegram_flag_not_web_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+
+    class _CapClient:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.append(kwargs)
+
+    monkeypatch.setattr(netproxy.httpx, "Client", _CapClient)
+    cfg = AppConfig().network
+    cfg.enabled = True
+    cfg.proxy_url = "http://127.0.0.1:7890"
+    cfg.proxy_for_telegram = True
+    cfg.proxy_for_web = False
+    netproxy.configure(cfg)
+
+    netproxy.client_telegram(timeout=5)
+    assert seen[-1].get("proxy") == "http://127.0.0.1:7890"
+
+    cfg.proxy_for_telegram = False
+    cfg.proxy_for_web = True
+    netproxy.client_telegram(timeout=5)
+    assert "proxy" not in seen[-1]
+
+
+def test_personal_checkin_sender_passes_telethon_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    from telegram_bot.shared.checkin_sender import PersonalCheckinSender
+
+    session_file = tmp_path / "user_session.session"
+    session_file.write_bytes(b"")
+
+    captured: list[dict[str, Any]] = []
+
+    class _FakeMe:
+        bot = False
+        id = 12345
+
+    class _FakeTGClient:
+        def __init__(self, session: str, api_id: Any, api_hash: str, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            self._connected = False
+
+        def is_connected(self) -> bool:
+            return self._connected
+
+        async def connect(self) -> None:
+            self._connected = True
+
+        async def is_user_authorized(self) -> bool:
+            return True
+
+        async def get_me(self) -> _FakeMe:
+            return _FakeMe()
+
+        async def send_message(self, target: str, text: str, parse_mode: Any = None) -> None:
+            pass
+
+        async def disconnect(self) -> None:
+            self._connected = False
+
+    monkeypatch.setattr(netproxy, "telethon_proxy", lambda: ("fake", "127.0.0.1", 7890, True, None, None))
+    cfg = AppConfig()
+    cfg.telegram.api_id = 123
+    cfg.telegram.api_hash = "0" * 32
+    cfg.telegram.session_dir = str(tmp_path)
+    cfg.checkin.user_session_name = "user_session"
+    cfg.checkin.user_id = "12345"
+
+    sender = PersonalCheckinSender(cfg.telegram, cfg.checkin, tmp_path, lambda *_a: None, factory=_FakeTGClient)
+    asyncio.run(sender("@bot", "/checkin"))
+    assert captured and captured[0].get("proxy") == ("fake", "127.0.0.1", 7890, True, None, None)

@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from telegram_bot.shared import netproxy
+
 
 class PersonalCheckinSender:
     """Use an existing user session for check-in without changing the group bot."""
@@ -15,7 +17,7 @@ class PersonalCheckinSender:
         self.fallback = fallback
         self.factory = factory
         self.client: Any = None
-        self._identity: tuple[str, str] | None = None
+        self._identity: tuple[Any, ...] | None = None
         self._lock = asyncio.Lock()
 
     async def __call__(self, target: str, text: str) -> None:
@@ -39,7 +41,8 @@ class PersonalCheckinSender:
         session = directory / name
         if not Path(str(session) + ".session").is_file():
             raise RuntimeError("Personal check-in session does not exist; log in first")
-        identity = (str(session), user_id)
+        proxy = netproxy.telethon_proxy()
+        identity = (str(session), user_id, proxy)
         if self.client is not None and self._identity != identity:
             await self.stop()
         if self.client is None:
@@ -47,7 +50,8 @@ class PersonalCheckinSender:
             if factory is None:
                 from telethon import TelegramClient
                 factory = TelegramClient
-            self.client = factory(str(session), self.telegram.api_id, self.telegram.api_hash)
+            kwargs: dict[str, Any] = {"proxy": proxy} if proxy is not None else {}
+            self.client = factory(str(session), self.telegram.api_id, self.telegram.api_hash, **kwargs)
         try:
             if not self.client.is_connected():
                 await self.client.connect()

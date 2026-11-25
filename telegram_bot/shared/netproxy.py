@@ -150,6 +150,17 @@ def client_external(**kwargs: Any) -> httpx.Client:
     return httpx.Client(**kwargs)
 
 
+def client_telegram(**kwargs: Any) -> httpx.Client:
+    """Telegram Bot API（api.telegram.org）专用：受 proxy_for_telegram 控制。"""
+    cfg = _CONFIG
+    if cfg is not None and _active() and getattr(cfg, "proxy_for_telegram", True):
+        if not should_bypass("https://api.telegram.org"):
+            spec = parse_proxy_url(getattr(cfg, "proxy_url", ""))
+            if spec:
+                kwargs.setdefault("proxy", spec["url"])
+    return httpx.Client(**kwargs)
+
+
 def telethon_proxy() -> Any:
     """给 TelegramClient(proxy=...) 用；无代理或 socks 依赖缺失时返回 None（直连）。"""
     cfg = _CONFIG
@@ -182,20 +193,95 @@ def telethon_proxy() -> Any:
     )
 
 
+_IP_PROBES: tuple[tuple[str, str], ...] = (
+    ("cloudflare", "https://www.cloudflare.com/cdn-cgi/trace"),
+    ("ip.sb", "https://api.ip.sb/geoip"),
+    ("ipinfo", "https://ipinfo.io/json"),
+    ("ipify", "https://api.ipify.org?format=json"),
+)
+
+_CONNECTIVITY_PROBES: tuple[tuple[str, str], ...] = (
+    ("Google 204", "https://www.gstatic.com/generate_204"),
+    ("GitHub", "https://github.com/robots.txt"),
+    ("Telegram API", "https://api.telegram.org"),
+)
+
+
+def _parse_ip_response(kind: str, resp: Any) -> dict[str, str] | None:
+    if kind == "cloudflare":
+        text = getattr(resp, "text", "")
+        if isinstance(text, str) and "ip=" in text:
+            fields: dict[str, str] = {}
+            for line in text.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    fields[k.strip()] = v.strip()
+            ip = fields.get("ip", "")
+            if ip:
+                return {"ip": ip, "country": fields.get("loc", ""), "city": "", "org": ""}
+        return None
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(data, dict):
+        return None
+    ip = str(data.get("ip") or "").strip()
+    if not ip:
+        return None
+    country = str(data.get("country_code") or data.get("country") or "").strip()
+    city = str(data.get("city") or "").strip()
+    org_raw = str(data.get("org") or data.get("organization") or data.get("asn_organization") or "").strip()
+    org = org_raw.split(" ")[0] if kind == "ipinfo" else org_raw
+    return {"ip": ip, "country": country, "city": city, "org": org}
+
+
+def _probe_ip(client: httpx.Client) -> tuple[dict[str, str] | None, str]:
+    last_error = ""
+    for kind, url in _IP_PROBES:
+        try:
+            resp = client.get(url)
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {exc}"[:200]
+            continue
+        if resp.status_code != 200:
+            last_error = f"{kind} HTTP {resp.status_code}"
+            continue
+        parsed = _parse_ip_response(kind, resp)
+        if parsed:
+            parsed["probe"] = kind
+            return parsed, ""
+        last_error = f"{kind} 返回格式异常"
+    return None, last_error or "无法获取出口 IP"
+
+
+def _probe_connectivity(client: httpx.Client) -> tuple[str, str]:
+    """当所有查 IP 源都被限流（如 429）时，用大厂探针确认代理本身是否连通。"""
+    last_error = ""
+    for name, url in _CONNECTIVITY_PROBES:
+        try:
+            resp = client.get(url)
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {exc}"[:200]
+            continue
+        if resp.status_code < 500:
+            return name, ""
+        last_error = f"{name} HTTP {resp.status_code}"
+    return "", last_error
+
+
 def direct_ip(*, timeout: float = 8.0) -> str:
     """不经代理探一次出口 IP，用来和代理出口做对照。"""
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get("https://ipinfo.io/json")
-        if resp.status_code == 200:
-            return str(resp.json().get("ip") or "")
+            parsed, _ = _probe_ip(client)
+        return parsed["ip"] if parsed else ""
     except Exception:  # noqa: BLE001
         return ""
-    return ""
 
 
 def test_proxy(proxy_url: str, *, timeout: float = 12.0, compare_direct: bool = True) -> dict[str, Any]:
-    """面板「测试代理」：直接经代理访问一个回显 IP 的服务。"""
+    """面板「测试代理」：多源探测出口 IP，全被限流时用 Google/GitHub/Telegram 兜底验证连通性。"""
     spec = parse_proxy_url(proxy_url)
     if not spec:
         return {"ok": False, "error": "代理地址格式不对，例：http://127.0.0.1:7890 或 socks5://user:pass@host:1080"}
@@ -203,25 +289,39 @@ def test_proxy(proxy_url: str, *, timeout: float = 12.0, compare_direct: bool = 
     detail: dict[str, Any] = {"proxy": mask_proxy_url(proxy_url)}
     try:
         with httpx.Client(proxy=spec["url"], timeout=timeout, follow_redirects=True) as client:
-            resp = client.get("https://ipinfo.io/json")
-        elapsed = int((time.monotonic() - started) * 1000)
-        if resp.status_code != 200:
-            return {"ok": False, "error": f"HTTP {resp.status_code}", "elapsed_ms": elapsed, **detail}
-        data = resp.json()
-        result = {
-            "ok": True,
-            "ip": data.get("ip", ""),
-            "country": data.get("country", ""),
-            "city": data.get("city", ""),
-            "org": (data.get("org") or "").split(" ")[0],
-            "elapsed_ms": elapsed,
-            **detail,
-        }
-        if compare_direct:
-            plain = direct_ip()
-            result["direct_ip"] = plain
-            result["egress_changed"] = bool(plain and result["ip"] and plain != result["ip"])
-        return result
+            parsed, ip_err = _probe_ip(client)
+            if parsed:
+                elapsed = int((time.monotonic() - started) * 1000)
+                result: dict[str, Any] = {
+                    "ok": True,
+                    "ip": parsed["ip"],
+                    "country": parsed["country"],
+                    "city": parsed["city"],
+                    "org": parsed["org"],
+                    "probe": parsed["probe"],
+                    "elapsed_ms": elapsed,
+                    **detail,
+                }
+                if compare_direct:
+                    plain = direct_ip()
+                    result["direct_ip"] = plain
+                    result["egress_changed"] = bool(plain and result["ip"] and plain != result["ip"])
+                return result
+            conn_probe, conn_err = _probe_connectivity(client)
+            elapsed = int((time.monotonic() - started) * 1000)
+            if conn_probe:
+                return {
+                    "ok": True,
+                    "ip": "",
+                    "country": "",
+                    "city": "",
+                    "org": "",
+                    "probe": conn_probe,
+                    "note": f"已通过 {conn_probe} 连通性验证（查 IP 接口暂不可用或被限流）",
+                    "elapsed_ms": elapsed,
+                    **detail,
+                }
+            return {"ok": False, "error": conn_err or ip_err, "elapsed_ms": elapsed, **detail}
     except Exception as exc:  # noqa: BLE001 - 面板要把原因显示给人看
         elapsed = int((time.monotonic() - started) * 1000)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200], "elapsed_ms": elapsed, **detail}

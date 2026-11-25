@@ -19,6 +19,14 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.25.2
+
+- 修「测试代理」在共享/机场代理节点上因 `ipinfo.io` 限流误报 `HTTP 429`：`netproxy.test_proxy()` 与 `direct_ip()` 改为多源回退（`cloudflare cdn-cgi/trace` → `api.ip.sb/geoip` → `ipinfo.io/json` → `api.ipify.org`）；全部查 IP 源均被限流时，继续用 `Google 204` → `GitHub` → `Telegram API` 验证连通性，连通即判定通过并附提示，不再误报不可用。
+- 修个人账号自动签到（`telegram_bot/shared/checkin_sender.py`）漏传 `proxy=netproxy.telethon_proxy()`，且切换代理后自动重连生效。
+- 修 Bot API（`telegram_bot/shared/botapi.py` 的 `getMe` / 通知推送）改走 `netproxy.client_telegram()`，按「Telegram 连接走代理」开关生效而非受「网页抓取走代理」控制。
+- 前端 `app.js` 适配无出口 IP 时的连通性兜底展示，避免误报「出口没变」。
+- 测试：`tests/test_netproxy.py` 新增 5 例（Cloudflare trace 解析、429 回退、Google 204 兜底、`client_telegram` 开关隔离、个人签到传代理），全套 460 passed, 1 skipped。
+
 ## 2026.11.25.1
 
 - 新增「网络代理」：`config.json` 的 `network` 段 + 面板「系统设置 → 网络代理」（开关 / 代理地址 / 「Telegram 连接走代理」「网页抓取走代理」两个勾选 / 例外清单 / 测试代理）。默认全直连，什么都不填时行为与之前完全一致。

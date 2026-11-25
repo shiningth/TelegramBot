@@ -27,7 +27,7 @@ def send_bot_message(
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        with netproxy.client_for("https://api.telegram.org", timeout=timeout) as client:
+        with netproxy.client_telegram(timeout=timeout) as client:
             resp = client.post(url, data={"chat_id": chat_id, "text": text})
         try:
             payload = resp.json()
@@ -65,7 +65,7 @@ def get_me(token: str, *, timeout: float = 15.0) -> dict[str, Any]:
         return result
     url = f"https://api.telegram.org/bot{token}/getMe"
     try:
-        with netproxy.client_for("https://api.telegram.org", timeout=timeout) as client:
+        with netproxy.client_telegram(timeout=timeout) as client:
             resp = client.post(url)
         try:
             payload = resp.json()

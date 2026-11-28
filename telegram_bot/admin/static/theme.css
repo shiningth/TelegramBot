@@ -103,6 +103,27 @@ body::before {
   text-transform: uppercase;
 }
 
+.brand-meta {
+  min-width: 0;
+}
+
+.brand .brand-version {
+  margin-top: 2px;
+  font-family: "Cascadia Mono", "Consolas", "SF Mono", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand .brand-version[hidden] {
+  display: none !important;
+}
+
 .side-nav {
   gap: 2px;
 }

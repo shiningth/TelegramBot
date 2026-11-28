@@ -70,6 +70,8 @@ jobs:
           build-args: |
             DEBIAN_MIRROR=http://deb.debian.org
             PIP_INDEX_URL=https://pypi.org/simple
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -453,6 +453,14 @@ async function refreshStatus() {
 
   document.getElementById("serviceState").textContent = data.service.state;
   document.getElementById("serviceState").className = `status-pill ${data.service.state}`;
+  const versionEl = document.getElementById("appVersion");
+  const versionText = data.project?.version || "";
+  if (versionEl) {
+    versionEl.textContent = versionText;
+    versionEl.hidden = !versionText;
+    const build = data.project?.build || "";
+    versionEl.title = build && build !== versionText ? `${versionText} (${build})` : versionText;
+  }
 
   ingestMetricHistory(data);
 
@@ -466,6 +474,7 @@ function renderDevice(data) {
   const device = data.system.device;
   const list = document.getElementById("deviceInfo");
   list.innerHTML = "";
+  if (data.project?.version) addKv(list, "应用版本", data.project.version);
   addKv(list, "主机名", device.hostname);
   addKv(list, "操作系统", device.os);
   addKv(list, "内核版本", device.system_platform);

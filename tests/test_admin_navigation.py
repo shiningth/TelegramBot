@@ -198,3 +198,16 @@ def test_admin_module_sidebar_only_shows_enabled_modules() -> None:
     assert "subNav.hidden = visibleCount === 0" in sync_source
     assert "chevron.hidden = visibleCount === 0" in sync_source
     assert "setGroupExpanded(group, hasVisibleSubNav)" in app_js
+
+
+def test_admin_webui_displays_app_version() -> None:
+    admin_static = ROOT / "telegram_bot" / "admin" / "static"
+    index_html = (admin_static / "index.html").read_text(encoding="utf-8")
+    theme_css = (admin_static / "theme.css").read_text(encoding="utf-8")
+    app_js = (admin_static / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="appVersion"' in index_html
+    assert ".brand .brand-version" in theme_css
+    assert "text-transform: none" in theme_css
+    assert 'getElementById("appVersion")' in app_js
+    assert 'addKv(list, "应用版本", data.project.version)' in app_js

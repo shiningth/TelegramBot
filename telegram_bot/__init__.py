@@ -1,3 +1,3 @@
 """TelegramBot rewrite package."""
 
-__version__ = "0.1.0"
+__version__ = "2026.11.28.2"

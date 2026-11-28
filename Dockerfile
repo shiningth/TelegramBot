@@ -34,14 +34,21 @@ RUN mkdir -p /data/config /app/sessions /app/runtime
 FROM scratch
 COPY --from=build / /
 
+ARG APP_VERSION=""
+ARG APP_COMMIT=""
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    TGBOT_APP_VERSION=$APP_VERSION \
+    TGBOT_APP_COMMIT=$APP_COMMIT
 
 WORKDIR /app
 EXPOSE 8088
 ENTRYPOINT ["python", "-m", "telegram_bot.container_entrypoint"]
 CMD ["python", "-m", "telegram_bot", "--config", "/data/config/config.json"]
-LABEL org.opencontainers.image.title="TelegramBot"
+LABEL org.opencontainers.image.title="TelegramBot" \
+      org.opencontainers.image.version="$APP_VERSION" \
+      org.opencontainers.image.revision="$APP_COMMIT"

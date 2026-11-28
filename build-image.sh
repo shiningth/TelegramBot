@@ -12,6 +12,8 @@ if docker image inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
 fi
 
 DOCKER_BUILDKIT=1 docker buildx build --load --progress=plain \
+  --build-arg "APP_VERSION=$VERSION" \
+  --build-arg "APP_COMMIT=$(git rev-parse HEAD 2>/dev/null || true)" \
   --label "org.opencontainers.image.version=$VERSION" \
   -t "$IMAGE:$VERSION" \
   -t "$IMAGE:local" \

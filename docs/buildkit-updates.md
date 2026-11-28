@@ -19,6 +19,12 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.28.2
+
+- WebUI 新增版本号展示：左侧栏品牌区 `TelegramBot` 下方（`#appVersion`）与仪表盘「设备信息」首行「应用版本」同步显示当前运行版本号及 7 位提交短 SHA（如 `v2026.11.28.2 · <sha>`），悬停提示附带完整构建标签。
+- 版本解析与构建注入：`telegram_bot/runtime.py` 新增 `_read_git_short_commit()` 与 `app_version_info()`（优先读取 `.git/HEAD`，无 `.git` 时自动回退到 `TGBOT_APP_VERSION` / `TGBOT_APP_COMMIT`）；`Dockerfile`、`.github/workflows/docker.yml`、`build-image.sh` 同步注入构建参数与 OCI 标签；`telegram_bot/__init__.py` 更新为 `2026.11.28.2`。
+- 测试：`tests/test_runtime.py` 与 `tests/test_admin_navigation.py` 新增版本解析及 WebUI 展示用例，全套 `488 passed, 1 skipped`。
+
 ## 2026.11.28.1
 
 - 管理后台侧栏「功能模块」改为仅显示已启用模块（`syncModuleSidebar()` 按 `module.enabled` 聚合共享视图：`checkin`/`site_checkin` 共用 `moduleCheckin`，`magnet_import`/`ltx_watch` 共用 `moduleMagnetImport`），0 个启用模块时自动隐藏子列表与折叠箭头，初始标记 `hidden` 避免首屏闪烁。

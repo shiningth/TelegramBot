@@ -53,6 +53,82 @@ def ensure_runtime_dirs(project_root: Path, dirs: list[str]) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+def _is_hex_prefix(value: str, length: int = 7) -> bool:
+    return len(value) >= length and all(ch in "0123456789abcdefABCDEF" for ch in value[:length])
+
+
+def _read_git_short_commit(project_root: Path) -> str:
+    """Resolve current 7-char lowercase commit SHA from .git without spawning git."""
+    try:
+        dot_git = project_root / ".git"
+        if dot_git.is_file():
+            pointer = dot_git.read_text(encoding="utf-8").strip()
+            if not pointer.startswith("gitdir:"):
+                return ""
+            target = Path(pointer[7:].strip())
+            git_dir = target if target.is_absolute() else (project_root / target).resolve()
+        elif dot_git.is_dir():
+            git_dir = dot_git
+        else:
+            return ""
+
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        sha = ""
+        if head.startswith("ref:"):
+            ref_name = head[4:].strip()
+            ref_file = git_dir / ref_name
+            if ref_file.is_file():
+                sha = ref_file.read_text(encoding="utf-8").strip()
+            else:
+                packed_refs = git_dir / "packed-refs"
+                if packed_refs.is_file():
+                    for raw_line in packed_refs.read_text(encoding="utf-8").splitlines():
+                        line = raw_line.strip()
+                        if not line or line.startswith(("#", "^")):
+                            continue
+                        parts = line.split()
+                        if len(parts) >= 2 and parts[1] == ref_name:
+                            sha = parts[0]
+                            break
+        else:
+            sha = head
+
+        return sha[:7].lower() if _is_hex_prefix(sha) else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def app_version_info(project_root: Path) -> dict[str, str]:
+    """Return structured version metadata for status API and WebUI display."""
+    from telegram_bot import __version__ as code_version
+
+    git_commit = _read_git_short_commit(project_root)
+    env_commit = os.getenv("TGBOT_APP_COMMIT", "").strip()
+    build = os.getenv("TGBOT_APP_VERSION", "").strip()
+
+    commit = git_commit or (env_commit[:7].lower() if _is_hex_prefix(env_commit) else "")
+    if not git_commit and build and not build.startswith("ci-"):
+        version = build.lstrip("vV")
+    else:
+        version = code_version.lstrip("vV") or build.lstrip("vV")
+
+    if version and commit:
+        display = f"v{version} · {commit}"
+    elif version:
+        display = f"v{version}"
+    elif commit:
+        display = commit
+    else:
+        display = "dev"
+
+    return {
+        "version": version,
+        "commit": commit,
+        "build": build,
+        "display": display,
+    }
+
+
 def system_snapshot(project_root: Path, app_uptime_seconds: int) -> dict[str, Any]:
     disk = shutil.disk_usage(project_root)
     total_memory = _total_memory_bytes()

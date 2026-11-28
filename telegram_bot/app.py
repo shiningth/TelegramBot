@@ -17,7 +17,7 @@ from .jobs import ChatHistoryBackfillJob
 from .logging_setup import RecentLogBuffer, configure_logging
 from .modules import ModuleRegistry, create_default_registry
 from .persistence import ChatHistoryStore
-from .runtime import RuntimeMetrics, ensure_runtime_dirs, system_snapshot
+from .runtime import RuntimeMetrics, app_version_info, ensure_runtime_dirs, system_snapshot
 from .telegram import TelegramAdapter
 from .usage import build_ai_usage_stats
 from .shared import netproxy
@@ -216,11 +216,15 @@ class TelegramBotApplication:
     def status_snapshot(self) -> dict[str, Any]:
         metrics = self.metrics.snapshot()
         system = system_snapshot(self.project_root, metrics["uptime_seconds"])
+        version_info = app_version_info(self.project_root)
         self._record_dashboard_sample(metrics, system)
         return {
             "project": {
                 "name": self.config.project_name,
-                "version": self.config.version,
+                "version": version_info["display"],
+                "app_version": version_info["version"],
+                "commit": version_info["commit"],
+                "build": version_info["build"],
                 "config_path": str(self.config_path),
                 "root": str(self.project_root),
             },

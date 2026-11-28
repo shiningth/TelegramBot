@@ -15,6 +15,11 @@ from telegram_bot.app import TelegramBotApplication
 from telegram_bot.config import AppConfig
 from telegram_bot.shared.tgcheck import check_formats
 
+FAKE_API_ID = 12345678
+FAKE_API_HASH = "0123456789abcdef0123456789abcdef"
+FAKE_BOT_USERNAME = "example_test_bot"
+FAKE_BOT_TOKEN = "123456789:" + "TestToken" + "0" * 26
+
 
 class _FakeAdapter:
     def __init__(self, *, connected: bool = False, username: str = "", error: str = "") -> None:
@@ -53,45 +58,45 @@ def _make_app(tmp_path: Path, adapter: _FakeAdapter | None = None) -> TelegramBo
 
 
 def test_snapshot_reports_masked_state(tmp_path: Path) -> None:
-    app = _make_app(tmp_path, _FakeAdapter(connected=True, username="shining20251201bot"))
+    app = _make_app(tmp_path, _FakeAdapter(connected=True, username=FAKE_BOT_USERNAME))
     app.config.telegram.enabled = True
-    app.config.telegram.api_id = 30255931
-    app.config.telegram.api_hash = "0123456789abcdef0123456789abcdef"
-    app.config.telegram.bot_token = "8503675925:AAEgGHiwtp57niqbERCVh5YQgnPlJTnoBy0"
+    app.config.telegram.api_id = FAKE_API_ID
+    app.config.telegram.api_hash = FAKE_API_HASH
+    app.config.telegram.bot_token = FAKE_BOT_TOKEN
 
     snapshot = app.telegram_settings_snapshot()
 
     assert snapshot["enabled"] is True
-    assert snapshot["api_id"] == 30255931
+    assert snapshot["api_id"] == FAKE_API_ID
     assert snapshot["has_api_hash"] is True
     assert snapshot["has_bot_token"] is True
     assert snapshot["connected"] is True
-    assert snapshot["bot_username"] == "shining20251201bot"
+    assert snapshot["bot_username"] == FAKE_BOT_USERNAME
     # 快照只暴露布尔，不回显明文
     assert "0123456789abcdef" not in str(snapshot)
-    assert "AAEgGHiwtp57" not in str(snapshot)
+    assert "TestToken" not in str(snapshot)
 
 
 def test_update_keeps_secrets_when_masked_values_are_echoed_back(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
-    app.config.telegram.api_hash = "0123456789abcdef0123456789abcdef"
-    app.config.telegram.bot_token = "8503675925:AAEgGHiwtp57niqbERCVh5YQgnPlJTnoBy0"
+    app.config.telegram.api_hash = FAKE_API_HASH
+    app.config.telegram.bot_token = FAKE_BOT_TOKEN
 
     with patch.object(app, "_schedule_telegram_restart") as restart:
         result = app.update_telegram_settings(
             {
                 "telegram": {
-                    "api_id": "30255931",
+                    "api_id": str(FAKE_API_ID),
                     "api_hash": "012***def",
-                    "bot_token": "850***By0",
+                    "bot_token": "123***000",
                     "enabled": True,
                 }
             }
         )
 
     assert result["changed"] == ["api_id", "enabled"]
-    assert app.config.telegram.api_hash == "0123456789abcdef0123456789abcdef"
-    assert app.config.telegram.bot_token.startswith("8503675925:")
+    assert app.config.telegram.api_hash == FAKE_API_HASH
+    assert app.config.telegram.bot_token.startswith("123456789:")
     restart.assert_called_once()
     assert app.config_path.exists()
 
@@ -109,10 +114,10 @@ def test_update_replaces_secret_when_a_new_value_is_given(tmp_path: Path) -> Non
 
 def test_update_without_changes_skips_restart(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
-    app.config.telegram.api_id = 30255931
+    app.config.telegram.api_id = FAKE_API_ID
 
     with patch.object(app, "_schedule_telegram_restart") as restart:
-        result = app.update_telegram_settings({"telegram": {"api_id": "30255931", "api_hash": "", "bot_token": ""}})
+        result = app.update_telegram_settings({"telegram": {"api_id": str(FAKE_API_ID), "api_hash": "", "bot_token": ""}})
 
     assert result["changed"] == []
     assert result["restarting"] is False
@@ -144,9 +149,9 @@ def test_test_settings_reports_format_errors_without_network(tmp_path: Path) -> 
 
 def test_test_settings_falls_back_to_stored_secrets(tmp_path: Path) -> None:
     app = _make_app(tmp_path)
-    app.config.telegram.api_id = 30255931
-    app.config.telegram.api_hash = "0123456789abcdef0123456789abcdef"
-    app.config.telegram.bot_token = "8503675925:AAEgGHiwtp57niqbERCVh5YQgnPlJTnoBy0"
+    app.config.telegram.api_id = FAKE_API_ID
+    app.config.telegram.api_hash = FAKE_API_HASH
+    app.config.telegram.bot_token = FAKE_BOT_TOKEN
 
     with patch("telegram_bot.app.check_api_credentials", return_value={"name": "api_id / api_hash 可用", "ok": True, "detail": "ok"}) as api_check, patch(
         "telegram_bot.app.check_bot_token", return_value={"name": "bot token 有效", "ok": True, "detail": "@bot"}
@@ -154,11 +159,11 @@ def test_test_settings_falls_back_to_stored_secrets(tmp_path: Path) -> None:
         result = app.test_telegram_settings({"telegram": {"api_hash": "012***def", "bot_token": ""}})
 
     assert result["ok"] is True
-    api_check.assert_called_once_with(30255931, "0123456789abcdef0123456789abcdef")
-    token_check.assert_called_once_with("8503675925:AAEgGHiwtp57niqbERCVh5YQgnPlJTnoBy0")
+    api_check.assert_called_once_with(FAKE_API_ID, FAKE_API_HASH)
+    token_check.assert_called_once_with(FAKE_BOT_TOKEN)
 
 
 def test_check_formats_accepts_real_looking_credentials() -> None:
-    checks = check_formats("30255931", "0123456789abcdef0123456789abcdef", "8503675925:AAEgGHiwtp57niqbERCVh5YQgnPlJTnoBy0")
+    checks = check_formats(str(FAKE_API_ID), FAKE_API_HASH, FAKE_BOT_TOKEN)
     assert all(item["ok"] for item in checks)
     assert [item["name"] for item in checks] == ["api_id 格式", "api_hash 格式", "bot token 格式"]

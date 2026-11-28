@@ -142,7 +142,7 @@ async def test_failed_send_code_leaves_no_session_file(tmp_path: Path, monkeypat
     monkeypatch.setattr(telethon, "TelegramClient", _BoomClient)
     manager = SessionLoginManager(tmp_path)
     with pytest.raises(RuntimeError, match="55531"):
-        await manager.send_code(phone="+8613800138000", session_name="zz_test", api_id=30255931, api_hash="a" * 32)
+        await manager.send_code(phone="+8613800138000", session_name="zz_test", api_id=12345678, api_hash="a" * 32)
     assert list(tmp_path.glob("*.session")) == []
     assert manager.state()["sessions"] == []
 
@@ -172,7 +172,7 @@ def test_session_login_state_reports_api_ready(tmp_path: Path) -> None:
     assert state["api_ready"] is False
     assert state["in_use"] == []
 
-    app.config.telegram.api_id = 30255931
+    app.config.telegram.api_id = 12345678
     app.config.telegram.api_hash = "0123456789abcdef0123456789abcdef"
     assert app.session_login_state()["api_ready"] is True
 

@@ -4,6 +4,7 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -95,3 +96,76 @@ def test_telegram_adapter_iterates_history_oldest_first_after_checkpoint(tmp_pat
     assert asyncio.run(collect()) == [11, 12]
     assert captured["entity"] == -100123
     assert captured["kwargs"] == {"min_id": 10, "reverse": True}
+
+
+def test_empty_monitor_selection_filters_messages_before_dispatch(tmp_path: Path) -> None:
+    config = TelegramConfig()
+    callback = AsyncMock()
+    adapter = TelegramAdapter(config, tmp_path, callback)
+    message = SimpleNamespace(chat_id=-100123, raw_text="test message")
+    private_message = SimpleNamespace(chat_id=123, raw_text="test message")
+
+    async def receive() -> None:
+        await adapter._handle_monitored_event(message, "message")
+        callback.assert_not_called()
+        dialog = SimpleNamespace(id=-100123, entity=SimpleNamespace(id=100123), is_group=True, title="Group")
+        adapter.client = SimpleNamespace(get_dialogs=AsyncMock(return_value=[dialog]))
+        adapter.connected = True
+        groups = await adapter.list_groups()
+        adapter.update_monitored_groups([groups[0]["id"]])
+        await adapter._handle_monitored_event(private_message, "message")
+        callback.assert_not_called()
+        await adapter._handle_monitored_event(message, "message")
+        callback.assert_awaited_once_with(message)
+        config.monitor_all = True
+        await adapter._handle_monitored_event(private_message, "message")
+        assert callback.await_count == 2
+
+    asyncio.run(receive())
+
+
+def test_bot_reconnect_uses_account_scoped_sessions_and_checks_identity(tmp_path: Path, monkeypatch) -> None:
+    import telethon
+
+    clients = []
+
+    class FakeTelegramClient:
+        def __init__(self, session, api_id, api_hash, **kwargs):
+            self.session = Path(session)
+            self.closed = False
+            clients.append(self)
+
+        async def start(self, *, bot_token):
+            self.bot_id = int(bot_token.split(":")[0])
+
+        async def get_me(self):
+            actual_id = self.bot_id if self.bot_id != 33333 else 22222
+            return SimpleNamespace(id=actual_id, bot=True, username=f"bot{actual_id}")
+
+        def on(self, event):
+            return lambda handler: handler
+
+        async def disconnect(self):
+            self.closed = True
+
+    monkeypatch.setattr(telethon, "TelegramClient", FakeTelegramClient)
+    config = TelegramConfig(enabled=True, api_id=1, api_hash="test", bot_token="11111:test")
+    adapter = TelegramAdapter(config, tmp_path, AsyncMock())
+
+    async def connect_and_switch() -> None:
+        await adapter.start()
+        assert adapter.connected and adapter.username == "bot11111"
+        config.bot_token = "22222:test"
+        await adapter.reconnect()
+        assert clients[0].closed
+        assert adapter.connected and adapter.username == "bot22222"
+        assert [client.session.name for client in clients] == [
+            "telegram_bot.bot-11111.session", "telegram_bot.bot-22222.session",
+        ]
+        config.bot_token = "33333:test"
+        await adapter.reconnect()
+        assert clients[-1].closed
+        assert not adapter.connected and adapter.client is None
+        assert "身份不一致" in adapter.last_error
+
+    asyncio.run(connect_and_switch())

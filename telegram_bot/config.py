@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 
@@ -16,6 +17,46 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             merged[key] = value
     return merged
+
+
+def write_json_atomic(path: Path, values: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(values, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+_SECRET_CONFIG_FIELDS = frozenset({
+    "api_hash", "api_key", "api_password", "bot_token", "cookie", "headers",
+    "notify_bot_token", "password", "proxy_url",
+})
+
+
+def public_config_values(values: Any) -> Any:
+    if isinstance(values, list):
+        return [public_config_values(value) for value in values]
+    if not isinstance(values, dict):
+        return values
+    public = {}
+    for key, value in values.copy().items():
+        if key in _SECRET_CONFIG_FIELDS:
+            public[key] = ""
+            flag = "has_proxy" if key == "proxy_url" else f"has_{key}"
+            public[flag] = bool(value) or bool(values.get(flag))
+        else:
+            public.setdefault(key, public_config_values(value))
+    return public
 
 
 @dataclass
@@ -37,6 +78,7 @@ class TelegramConfig:
     session_dir: str = "sessions"
     monitored_groups: list[str] = field(default_factory=list)
     monitored_group_meta: dict[str, dict[str, str]] = field(default_factory=dict)
+    monitor_all: bool = False
 
 
 @dataclass
@@ -628,11 +670,7 @@ class AppConfig:
     def ensure_file(cls, path: Path) -> None:
         if path.exists():
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(cls.defaults_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        write_json_atomic(path, cls.defaults_dict())
 
     @classmethod
     def load(cls, path: Path) -> "AppConfig":
@@ -707,26 +745,10 @@ class AppConfig:
         )
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(asdict(self), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        write_json_atomic(path, asdict(self))
 
     def public_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        for provider in (data["ai"]["reply_provider"], data["ai"]["image_provider"]):
-            if provider.get("api_key"):
-                provider["api_key"] = _mask_secret(provider["api_key"])
-        if data["telegram"].get("api_hash"):
-            data["telegram"]["api_hash"] = _mask_secret(data["telegram"]["api_hash"])
-        if data["telegram"].get("bot_token"):
-            data["telegram"]["bot_token"] = _mask_secret(data["telegram"]["bot_token"])
-        if data["admin"].get("password"):
-            data["admin"]["password"] = _mask_secret(data["admin"]["password"])
-        if data["magnet_import"].get("api_password"):
-            data["magnet_import"]["api_password"] = _mask_secret(data["magnet_import"]["api_password"])
-        return data
+        return public_config_values(asdict(self))
 
 
 _TELEGRAM_ENV_KEYS = (
@@ -773,7 +795,9 @@ def network_config_from_dict(data: Any) -> NetworkConfig:
     if not no_proxy:
         no_proxy = list(DEFAULT_NO_PROXY)
 
-    if os.getenv("TGBOT_PROXY_ENABLED") not in (None, ""):
+    if proxy_url and not from_env and "enabled" in data:
+        enabled = bool(data["enabled"])
+    elif os.getenv("TGBOT_PROXY_ENABLED") not in (None, ""):
         enabled = bool(_coerce_env_value(str(os.getenv("TGBOT_PROXY_ENABLED"))))
     elif from_env:
         enabled = True
@@ -792,23 +816,30 @@ def network_config_from_dict(data: Any) -> NetworkConfig:
 
 
 def _apply_env_overrides(config: dict[str, Any]) -> None:
-    env_map = {
-        "TGBOT_ADMIN_HOST": ("admin", "host"),
-        "TGBOT_ADMIN_PORT": ("admin", "port"),
-        "TGBOT_ADMIN_USERNAME": ("admin", "username"),
-        "TGBOT_ADMIN_PASSWORD": ("admin", "password"),
-        "TGBOT_TELEGRAM_API_ID": ("telegram", "api_id"),
-        "TGBOT_TELEGRAM_API_HASH": ("telegram", "api_hash"),
-        "TGBOT_TELEGRAM_BOT_TOKEN": ("telegram", "bot_token"),
-        "TGBOT_TELEGRAM_ENABLED": ("telegram", "enabled"),
-        "TGBOT_LOG_LEVEL": ("logs", "level"),
+    env_map: dict[str, tuple[str, str, str]] = {
+        "TGBOT_ADMIN_HOST": ("admin", "host", "str"),
+        "TGBOT_ADMIN_PORT": ("admin", "port", "int"),
+        "TGBOT_ADMIN_USERNAME": ("admin", "username", "str"),
+        "TGBOT_ADMIN_PASSWORD": ("admin", "password", "str"),
+        "TGBOT_TELEGRAM_API_ID": ("telegram", "api_id", "int"),
+        "TGBOT_TELEGRAM_API_HASH": ("telegram", "api_hash", "str"),
+        "TGBOT_TELEGRAM_BOT_TOKEN": ("telegram", "bot_token", "str"),
+        "TGBOT_TELEGRAM_ENABLED": ("telegram", "enabled", "bool"),
+        "TGBOT_LOG_LEVEL": ("logs", "level", "str"),
     }
-    for env_name, path in env_map.items():
+    for env_name, (section, key, kind) in env_map.items():
         raw = os.getenv(env_name)
         if raw is None:
             continue
-        section, key = path
-        config[section][key] = _coerce_env_value(raw)
+        if kind == "str":
+            config[section][key] = raw
+        elif kind == "int":
+            try:
+                config[section][key] = int(raw.strip())
+            except ValueError:
+                config[section][key] = raw
+        else:
+            config[section][key] = bool(_coerce_env_value(raw))
 
 
 def _coerce_env_value(value: str) -> Any:
@@ -1376,9 +1407,3 @@ def _list_or_default(value: Any, default: list[str]) -> list[str]:
         return list(default)
     cleaned = [str(item).strip() for item in value if str(item).strip()]
     return cleaned or list(default)
-
-
-def _mask_secret(value: str) -> str:
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:3]}***{value[-3:]}"

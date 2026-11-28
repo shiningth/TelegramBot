@@ -111,7 +111,7 @@ class WordCloudModule:
 
         try:
             messages = await fetch_recent_messages(client, chat_id, limit)
-            words, valid_messages = build_word_cloud_from_messages(messages, self.config)
+            words, valid_messages = await asyncio.to_thread(build_word_cloud_from_messages, messages, self.config)
             if not words:
                 await safe_edit_message(status_message, format_word_cloud_status("没有统计到足够的热词。"), parse_mode="html")
                 return
@@ -165,15 +165,20 @@ async def fetch_recent_messages(client: Any, chat_id: Any, limit: int) -> list[A
     return messages
 
 
+def _build_stop_words(config: WordCloudConfig) -> frozenset[str]:
+    return frozenset(DEFAULT_STOP_WORDS | {item.strip().lower() for item in config.stop_words if item.strip()})
+
+
 def build_word_cloud_from_messages(messages: list[Any], config: WordCloudConfig) -> tuple[list[dict[str, Any]], int]:
     counts: Counter[str] = Counter()
     valid_messages = 0
+    stop_words = _build_stop_words(config)
     for item in messages:
         text = _message_text(item).strip()
         if not text or should_ignore_message_text(text, config):
             continue
         valid_messages += 1
-        collect_words(text, counts, config)
+        collect_words(text, counts, config, stop_words=stop_words)
     return build_word_items(counts), valid_messages
 
 
@@ -184,38 +189,59 @@ def should_ignore_message_text(text: str, config: WordCloudConfig) -> bool:
     return any(stripped.startswith(prefix) for prefix in config.ignore_command_prefixes if prefix)
 
 
-def collect_words(text: str, counts: Counter[str], config: WordCloudConfig) -> None:
+def collect_words(
+    text: str,
+    counts: Counter[str],
+    config: WordCloudConfig,
+    *,
+    stop_words: frozenset[str] | None = None,
+) -> None:
+    if stop_words is None:
+        stop_words = _build_stop_words(config)
     cleaned = URL_RE.sub(" ", text)
     cleaned = MENTION_TAG_RE.sub(" ", cleaned)
     cleaned = re.sub(r"[^\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaffa-zA-Z0-9_+\-.]+", " ", cleaned)
 
     for match in ASCII_WORD_RE.finditer(cleaned):
-        add_word(counts, match.group(0), config, 2)
+        add_word(counts, match.group(0), config, 2, stop_words=stop_words)
     for match in NUMBER_RE.finditer(cleaned):
-        add_word(counts, match.group(0), config, 1)
+        add_word(counts, match.group(0), config, 1, stop_words=stop_words)
     for match in HAN_RE.finditer(cleaned):
         part = match.group(0)
         if len(part) <= 4:
-            add_word(counts, part, config, 3)
+            add_word(counts, part, config, 3, stop_words=stop_words)
             continue
         for size in range(2, 6):
             for index in range(0, len(part) - size + 1):
                 word = part[index : index + size]
                 edge_bonus = 1 if index == 0 or index == len(part) - size else 0
-                add_word(counts, word, config, (1 + edge_bonus) if size <= 3 else (2 + edge_bonus))
+                add_word(counts, word, config, (1 + edge_bonus) if size <= 3 else (2 + edge_bonus), stop_words=stop_words)
 
 
-def add_word(counts: Counter[str], word: str, config: WordCloudConfig, weight: int = 1) -> None:
+def add_word(
+    counts: Counter[str],
+    word: str,
+    config: WordCloudConfig,
+    weight: int = 1,
+    *,
+    stop_words: frozenset[str] | None = None,
+) -> None:
     normalized = word.strip().lower()
-    if not is_useful_word(normalized, config):
+    if not is_useful_word(normalized, config, stop_words=stop_words):
         return
     counts[normalized] += weight
 
 
-def is_useful_word(word: str, config: WordCloudConfig) -> bool:
+def is_useful_word(
+    word: str,
+    config: WordCloudConfig,
+    *,
+    stop_words: frozenset[str] | None = None,
+) -> bool:
     if not word:
         return False
-    stop_words = DEFAULT_STOP_WORDS | {item.strip().lower() for item in config.stop_words if item.strip()}
+    if stop_words is None:
+        stop_words = _build_stop_words(config)
     if word in stop_words:
         return False
     if word.isdigit():

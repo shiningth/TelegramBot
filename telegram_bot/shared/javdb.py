@@ -634,13 +634,11 @@ def _fetch_javdb_html(url: str, *, flaresolverr: str = "", timeout: float = 20.0
     """取 JavDB 页面 HTML：配了 FlareSolverr 就走它（过 Cloudflare），否则直连。"""
     if flaresolverr:
         return fetch_via_flaresolverr(url, flaresolverr, timeout=max(timeout, 60.0)) or ""
-    import httpx
-
     try:
         if client is not None:
             resp = client.get(url, headers={"User-Agent": _UA})
         else:
-            with httpx.Client(follow_redirects=True, timeout=timeout) as own:
+            with netproxy.client_for(url, follow_redirects=True, timeout=timeout) as own:
                 resp = own.get(url, headers={"User-Agent": _UA})
     except Exception as exc:  # noqa: BLE001
         logger.info("JavDB 直连失败 %s: %s", url, exc)

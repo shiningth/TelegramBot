@@ -4,6 +4,7 @@ import os
 import platform
 import shutil
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,20 +20,24 @@ class RuntimeMetrics:
     _last_wall: float = field(default_factory=time.time)
     _last_cpu: float = field(default_factory=time.process_time)
     _last_cpu_percent: float = 0.0
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
-        now = time.time()
-        cpu_now = time.process_time()
-        wall_delta = max(now - self._last_wall, 0.001)
-        cpu_delta = max(cpu_now - self._last_cpu, 0.0)
-        self._last_cpu_percent = min((cpu_delta / wall_delta) * 100.0, 100.0)
-        self._last_wall = now
-        self._last_cpu = cpu_now
+        with self._lock:
+            now = time.time()
+            cpu_now = time.process_time()
+            wall_delta = now - self._last_wall
+            if wall_delta >= 0.2:
+                cpu_delta = max(cpu_now - self._last_cpu, 0.0)
+                self._last_cpu_percent = min((cpu_delta / wall_delta) * 100.0, 100.0)
+                self._last_wall = now
+                self._last_cpu = cpu_now
+            cpu_percent = round(self._last_cpu_percent, 2)
         return {
             "pid": os.getpid(),
             "platform": platform.platform(),
             "uptime_seconds": int(now - self.started_at),
-            "cpu_percent": round(self._last_cpu_percent, 2),
+            "cpu_percent": cpu_percent,
             "memory_bytes": _memory_bytes(),
             "messages_seen": self.messages_seen,
             "messages_handled": self.messages_handled,

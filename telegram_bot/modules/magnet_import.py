@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -71,6 +72,7 @@ class MagnetImportModule:
         self._importer = importer
         self._sleep = sleep
         self._lock = asyncio.Lock()
+        self._state_lock = threading.RLock()
         self._tasks: set[asyncio.Task] = set()
         self._in_progress: set[str] = set()
         self._state = self._load_state()
@@ -208,31 +210,36 @@ class MagnetImportModule:
                 logger.info("Magnet import downloaded %s (%s bytes) in %.1fs", name, size, time.monotonic() - started)
 
                 self._set_last(name, "importing", "")
-                with contextlib.ExitStack() as stack:
-                    lookup = self._existing_lookup()
-                    if lookup is not None and hasattr(lookup, "__enter__"):
-                        try:
-                            stack.enter_context(lookup)
-                        except Exception:
-                            # 登录不上就不预检，交给 momo 自己判重（导入不该因此中断）
-                            logger.warning("magnet import precheck login failed, skipping precheck", exc_info=True)
-                            lookup = None
-                        else:
-                            prime = getattr(lookup, "prime", None)
-                            if prime is not None:
-                                self._set_last(name, "importing", "读取 momo 索引…")
-                                try:
-                                    rows = await asyncio.to_thread(prime)
-                                    logger.info("Magnet import %s: precheck index rows=%s", name, rows)
-                                except Exception:
-                                    # 拉索引失败就退回逐条查询，慢一点但结果一样
-                                    logger.warning("magnet import precheck index failed, falling back to per-row queries", exc_info=True)
+                lookup = self._existing_lookup()
+                entered_lookup = False
+                if lookup is not None and hasattr(lookup, "__enter__"):
+                    try:
+                        await asyncio.to_thread(lookup.__enter__)
+                        entered_lookup = True
+                    except Exception:
+                        # 登录不上就不预检，交给 momo 自己判重（导入不该因此中断）
+                        logger.warning("magnet import precheck login failed, skipping precheck", exc_info=True)
+                        lookup = None
+                try:
+                    if entered_lookup and lookup is not None:
+                        prime = getattr(lookup, "prime", None)
+                        if prime is not None:
+                            self._set_last(name, "importing", "读取 momo 索引…")
+                            try:
+                                rows = await asyncio.to_thread(prime)
+                                logger.info("Magnet import %s: precheck index rows=%s", name, rows)
+                            except Exception:
+                                # 拉索引失败就退回逐条查询，慢一点但结果一样
+                                logger.warning("magnet import precheck index failed, falling back to per-row queries", exc_info=True)
                     prepared = await asyncio.to_thread(
                         prepare_csv,
                         dest,
                         lookup=lookup,
                         progress=self._precheck_progress(name),
                     )
+                finally:
+                    if entered_lookup and lookup is not None and hasattr(lookup, "__exit__"):
+                        await asyncio.to_thread(lookup.__exit__, None, None, None)
                 logger.info("Magnet import precheck %s: %s", name, prepared.summary())
                 upload = prepared.path
                 try:
@@ -486,24 +493,28 @@ class MagnetImportModule:
     def _save_state(self) -> None:
         path = self._resolve(self.config.state_store)
         try:
+            with self._state_lock:
+                payload = json.dumps(self._state, ensure_ascii=False, indent=2)
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(payload, encoding="utf-8")
             tmp.replace(path)
         except OSError:
             logger.warning("Failed to save magnet import state", exc_info=True)
 
     def _metrics(self) -> dict[str, Any]:
-        return {
-            "imported": int(self._state.get("imported", 0)),
-            "denied": int(self._state.get("denied", 0)),
-            "last": self._state.get("last") or {},
-        }
+        with self._state_lock:
+            return {
+                "imported": int(self._state.get("imported", 0)),
+                "denied": int(self._state.get("denied", 0)),
+                "last": dict(self._state.get("last") or {}),
+            }
 
     def _note_denied(self, message: Any) -> None:
         """静默拦截非授权用户的指令：群里不发言，只在后台计数并留一行日志。"""
-        self._state["denied"] = int(self._state.get("denied", 0)) + 1
-        self.card.metrics = self._metrics()
+        with self._state_lock:
+            self._state["denied"] = int(self._state.get("denied", 0)) + 1
+            self.card.metrics = self._metrics()
         logger.info(
             "Magnet import ignored unauthorized command: chat_id=%s sender_id=%s message_id=%s text=%s",
             getattr(message, "chat_id", ""),
@@ -515,19 +526,21 @@ class MagnetImportModule:
 
     def _set_last(self, name: str, status: str, detail: str) -> None:
         last = {"file": name, "status": status, "detail": detail, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
-        self._state["last"] = last
-        self.card.metrics = self._metrics()
+        with self._state_lock:
+            self._state["last"] = last
+            self.card.metrics = self._metrics()
         if status not in {"downloading", "importing"}:
             self._save_state()
 
     def _record(self, key: str, name: str, status: str, detail: str) -> None:
-        processed = self._state.setdefault("processed", {})
-        processed[key] = {"file": name, "status": status, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
-        while len(processed) > _STATE_LIMIT:
-            processed.pop(next(iter(processed)))
-        if status == "imported":
-            self._state["imported"] = int(self._state.get("imported", 0)) + 1
-        self._set_last(name, status, detail)
+        with self._state_lock:
+            processed = self._state.setdefault("processed", {})
+            processed[key] = {"file": name, "status": status, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            while len(processed) > _STATE_LIMIT:
+                processed.pop(next(iter(processed)))
+            if status == "imported":
+                self._state["imported"] = int(self._state.get("imported", 0)) + 1
+            self._set_last(name, status, detail)
 
 
 async def _refetch(client: Any, message: Any) -> Any:

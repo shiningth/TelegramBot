@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -93,8 +94,11 @@ class ChatGamesModule:
 
     async def stop(self) -> None:
         self.card.status = "stopped"
-        for task in list(self._tasks):
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         self.active_games.clear()
 
@@ -155,7 +159,7 @@ class ChatGamesModule:
             display_answer=item.answers[0],
             answer_set=answers,
             reward_text=reward_text,
-            image_builder=lambda output: render_emoji_riddle_png(item, output),
+            image_builder=lambda output: render_emoji_riddle_png(item, output, reward_text=reward_text),
             caption=build_emoji_riddle_caption(item, cfg.duration_seconds, reward_text),
         )
 
@@ -259,9 +263,10 @@ class ChatGamesModule:
         if sender:
             active.correct_sender_ids.add(sender)
         self.card.metrics.update({"last_correct_answers": len(active.correct)})
-        self.active_games.pop(_chat_key(chat_id), None)
-        self.card.metrics.update({"active_games": len(self.active_games)})
-        await self._award_game(active, answer)
+        if active.winner_policy == "first":
+            self.active_games.pop(_chat_key(chat_id), None)
+            self.card.metrics.update({"active_games": len(self.active_games)})
+            await self._award_game(active, answer)
         return True
 
     async def _settle_game(self, chat_key: str, game_id: str) -> None:
@@ -472,7 +477,7 @@ def build_garbled_decode_caption(duration_seconds: float, reward_text: str) -> s
     return f"🔐 乱码解码\n图里藏着一句话，{int(duration_seconds)} 秒内直接回复原句，第一个答中 {reward_text}。"
 
 
-def render_emoji_riddle_png(item: EmojiRiddleItemConfig, output_path: Path) -> Path:
+def render_emoji_riddle_png(item: EmojiRiddleItemConfig, output_path: Path, reward_text: str = "+100") -> Path:
     if Image is None or ImageDraw is None:
         raise RuntimeError("Pillow is not installed")
     width, height = 960, 540
@@ -488,7 +493,7 @@ def render_emoji_riddle_png(item: EmojiRiddleItemConfig, output_path: Path) -> P
     draw_centered_mixed_text(image, item.clue, clue_font, width, 236, "#111827")
     if item.hint:
         draw_centered_text(draw, f"提示：{item.hint}", hint_font, width, 390, "#334155")
-    draw.text((56, height - 70), "答对池开奖：+100", fill="#0f766e", font=hint_font)
+    draw.text((56, height - 70), f"答对池开奖：{reward_text}", fill="#0f766e", font=hint_font)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG")
     return output_path
@@ -787,6 +792,7 @@ def draw_centered_text(draw: Any, text: str, font: Any, width: int, y: int, fill
     draw.text(((width - text_width) / 2, y), text, fill=fill, font=font)
 
 
+@functools.lru_cache(maxsize=64)
 def load_font(size: int, *, prefer_emoji: bool) -> Any:
     if ImageFont is None:
         raise RuntimeError("Pillow is not installed")
@@ -801,6 +807,7 @@ def load_font(size: int, *, prefer_emoji: bool) -> Any:
         return ImageFont.load_default()
 
 
+@functools.lru_cache(maxsize=4)
 def find_font_candidates(prefer_emoji: bool) -> list[str]:
     emoji_candidates = [
         r"C:\Windows\Fonts\seguiemj.ttf",

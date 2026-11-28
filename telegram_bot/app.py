@@ -5,8 +5,9 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +89,29 @@ class TelegramBotApplication:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.service_state = "starting"
         self.dashboard_history: list[dict[str, float]] = []
+        self._dashboard_lock = threading.Lock()
+        self._service_lock: asyncio.Lock | None = None
+
+    def _get_service_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_service_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._service_lock = lock
+        return lock
+
+    def _schedule_coro(self, coro: Any, label: str) -> None:
+        if not self.loop:
+            coro.close()
+            return
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+        def _on_done(done_future: Any) -> None:
+            try:
+                done_future.result()
+            except Exception:
+                logger.exception("Background action failed: %s", label)
+
+        future.add_done_callback(_on_done)
 
     async def run_forever(self) -> None:
         self.loop = asyncio.get_running_loop()
@@ -110,21 +134,23 @@ class TelegramBotApplication:
         await stop_event.wait()
 
     async def start_service(self) -> None:
-        self.service_state = "starting"
-        await self.telegram.start()
-        await self.chat_history_backfill.start()
-        await self.modules.start_enabled()
-        self.service_state = "running"
-        logger.info("Core service started")
+        async with self._get_service_lock():
+            self.service_state = "starting"
+            await self.telegram.start()
+            await self.chat_history_backfill.start()
+            await self.modules.start_enabled()
+            self.service_state = "running"
+            logger.info("Core service started")
 
     async def stop_service(self) -> None:
-        self.service_state = "stopping"
-        await self.chat_history_backfill.stop()
-        await self.modules.stop_all()
-        await self.checkin_sender.stop()
-        await self.telegram.stop()
-        self.service_state = "stopped"
-        logger.info("Core service stopped")
+        async with self._get_service_lock():
+            self.service_state = "stopping"
+            await self.chat_history_backfill.stop()
+            await self.modules.stop_all()
+            await self.checkin_sender.stop()
+            await self.telegram.stop()
+            self.service_state = "stopped"
+            logger.info("Core service stopped")
 
     async def restart_service(self) -> None:
         await self.stop_service()
@@ -135,15 +161,21 @@ class TelegramBotApplication:
                 handler.flush()
             except Exception:
                 pass
+        chat_history = getattr(self, "chat_history", None)
+        if chat_history is not None:
+            chat_history.close()
         try:
             os.execv(sys.executable, argv)
         except OSError:
             logger.exception("Full service restart failed; restoring the stopped service")
+            if chat_history is not None and hasattr(chat_history, "_closed"):
+                chat_history._closed = False
             await self.start_service()
             raise
 
     async def shutdown(self) -> None:
         await self.stop_service()
+        await self.session_login.close()
         self.chat_history.close()
         self.admin.stop()
         if hasattr(self, "_stop_event"):
@@ -158,7 +190,7 @@ class TelegramBotApplication:
             "restart": self.restart_service,
         }
         func = mapping[action]
-        asyncio.run_coroutine_threadsafe(func(), self.loop)
+        self._schedule_coro(func(), f"service:{action}")
 
     async def _on_telegram_message(self, event: Any) -> None:
         self.metrics.messages_seen += 1
@@ -210,16 +242,20 @@ class TelegramBotApplication:
 
     def _record_dashboard_sample(self, metrics: dict[str, Any], system: dict[str, Any]) -> None:
         stats = system.get("stats", {})
+        now = time.time()
         sample = {
-            "ts": time.time(),
+            "ts": now,
             "cpu": float(metrics.get("cpu_percent") or 0),
             "memory": float(stats.get("memory_percent") or 0),
             "upload_bytes": float(stats.get("upload_bytes") or 0),
             "download_bytes": float(stats.get("download_bytes") or 0),
         }
-        self.dashboard_history.append(sample)
-        if len(self.dashboard_history) > 720:
-            del self.dashboard_history[:-720]
+        with self._dashboard_lock:
+            if self.dashboard_history and now - self.dashboard_history[-1]["ts"] < 1.0:
+                return
+            self.dashboard_history.append(sample)
+            if len(self.dashboard_history) > 720:
+                del self.dashboard_history[:-720]
 
     def ai_snapshot(self) -> dict[str, Any]:
         self._sync_runtime_ai_settings_from_modules()
@@ -307,12 +343,19 @@ class TelegramBotApplication:
 
     def update_settings(self, values: dict[str, Any]) -> None:
         telegram = values.get("telegram", {})
-        if isinstance(telegram, dict) and "monitored_groups" in telegram:
-            groups = telegram["monitored_groups"]
+        if isinstance(telegram, dict):
+            tg = self.config.telegram
+            candidate = replace(tg)
+            groups = telegram.get("monitored_groups")
             if isinstance(groups, list):
                 meta = telegram.get("monitored_group_meta")
-                self.telegram.update_monitored_groups(groups, meta if isinstance(meta, dict) else None)
-        self.config.save(self.config_path)
+                self.telegram.update_monitored_groups(
+                    groups, meta if isinstance(meta, dict) else None, config=candidate
+                )
+            if isinstance(telegram.get("monitor_all"), bool):
+                candidate.monitor_all = telegram["monitor_all"]
+            replace(self.config, telegram=candidate).save(self.config_path)
+            tg.__dict__.update(vars(candidate))
         logger.info("Settings updated from admin UI")
 
     # ------------------------------------------------------------------
@@ -337,7 +380,8 @@ class TelegramBotApplication:
         telegram = values.get("telegram")
         if not isinstance(telegram, dict):
             telegram = values if isinstance(values, dict) else {}
-        tg = self.config.telegram
+        current = self.config.telegram
+        tg = replace(current)
         changed: list[str] = []
 
         if "api_id" in telegram:
@@ -367,7 +411,8 @@ class TelegramBotApplication:
         if not changed:
             return {**self.telegram_settings_snapshot(), "changed": [], "restarting": False}
 
-        self.config.save(self.config_path)
+        replace(self.config, telegram=tg).save(self.config_path)
+        current.__dict__.update(vars(tg))
         restarting = any(item in changed for item in ("api_id", "api_hash", "bot_token", "enabled"))
         if restarting:
             self._schedule_telegram_restart()
@@ -423,7 +468,8 @@ class TelegramBotApplication:
         payload = values if isinstance(values, dict) else {}
         if isinstance(payload.get("network"), dict):
             payload = payload["network"]
-        net = self.config.network
+        current = self.config.network
+        net = replace(current)
         changed: list[str] = []
 
         raw_url = str(payload.get("proxy_url") or "").strip()
@@ -453,9 +499,10 @@ class TelegramBotApplication:
         if not changed:
             return {**self.network_settings_snapshot(), "changed": [], "restarting": False}
 
-        self.config.save(self.config_path)
+        restarting = netproxy.telegram_proxy_route(current) != netproxy.telegram_proxy_route(net)
+        replace(self.config, network=net).save(self.config_path)
+        self.config.network = net
         netproxy.configure(net)
-        restarting = bool(net.enabled and net.proxy_url)
         if restarting:
             # 代理变了旧连接还挂在老出口上，重连一次
             self._schedule_telegram_restart()
@@ -553,15 +600,13 @@ class TelegramBotApplication:
             self.telegram.last_error = "凭证已保存，但事件循环未就绪，请重启容器使其生效"
             logger.warning("事件循环未就绪，跳过 Telegram 适配器重启")
             return
-        asyncio.run_coroutine_threadsafe(self._restart_telegram(), self.loop)
+        self._schedule_coro(self._restart_telegram(), "telegram:restart")
 
     async def _restart_telegram(self) -> None:
+        if self.service_state in {"stopping", "stopped"}:
+            return
         try:
-            await self.telegram.stop()
-        except Exception:  # noqa: BLE001 - 停不下来也要继续尝试重连
-            logger.warning("停止 Telegram 适配器时出错", exc_info=True)
-        try:
-            await self.telegram.start()
+            await self.telegram.reconnect()
             logger.info(
                 "Telegram 适配器已按新凭证重连：connected=%s user=%s",
                 self.telegram.connected,
@@ -604,19 +649,6 @@ class TelegramBotApplication:
         if module is None:
             return None
 
-        if "enabled" in values:
-            enabled = bool(values["enabled"])
-            module.card.enabled = enabled
-            if hasattr(self.config.modules, module_id):
-                setattr(self.config.modules, module_id, enabled)
-            if module_id == "ai_reply":
-                self.config.ai.reply_provider.enabled = enabled
-            elif module_id == "ai_image":
-                self.config.ai.image_provider.enabled = enabled
-            if self.loop and self.service_state == "running":
-                action = module.start if enabled else module.stop
-                asyncio.run_coroutine_threadsafe(action(), self.loop)
-
         if "config" in values and isinstance(values["config"], dict):
             module.update_config(values["config"])
             if module_id == "red_packet" and hasattr(module, "config"):
@@ -650,9 +682,23 @@ class TelegramBotApplication:
             if module_id == "site_checkin" and hasattr(module, "config"):
                 self.config.site_checkin = module.config
 
+        if "enabled" in values:
+            enabled = bool(values["enabled"])
+            if hasattr(self.config.modules, module_id):
+                setattr(self.config.modules, module_id, enabled)
+            if module_id == "ai_reply":
+                self.config.ai.reply_provider.enabled = enabled
+            elif module_id == "ai_image":
+                self.config.ai.image_provider.enabled = enabled
+
         self.config.save(self.config_path)
+        if "enabled" in values:
+            module.card.enabled = enabled
+            if self.loop and self.service_state == "running":
+                action = module.start if enabled else module.stop
+                self._schedule_coro(action(), f"module:{module_id}:{'start' if enabled else 'stop'}")
         logger.info("Module updated: %s", module_id)
-        return module.card.__dict__
+        return module.card.public_dict()
 
     def _public_ai_provider(self, provider: AIProviderConfig) -> dict[str, Any]:
         data = asdict(provider)
@@ -750,7 +796,7 @@ class TelegramBotApplication:
             if module is None or bool(module.card.enabled) == was_enabled:
                 continue
             action = module.start if module.card.enabled else module.stop
-            asyncio.run_coroutine_threadsafe(action(), self.loop)
+            self._schedule_coro(action(), f"ai_module:{module_id}:{'start' if module.card.enabled else 'stop'}")
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()

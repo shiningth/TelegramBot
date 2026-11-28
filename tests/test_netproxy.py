@@ -77,7 +77,7 @@ def test_parse_proxy_url_rejects_empty() -> None:
 def test_mask_proxy_url_hides_password() -> None:
     masked = netproxy.mask_proxy_url("socks5://user:secret@10.0.0.2:1080")
     assert "secret" not in masked
-    assert masked == "socks5://user:***@10.0.0.2:1080"
+    assert masked == "socks5://***@10.0.0.2:1080"
 
 
 # ---------------------------------------------------------------- 绕过判定
@@ -202,6 +202,30 @@ def test_update_network_settings_saves_and_reconnects(tmp_path: Path) -> None:
     assert app.config.network.proxy_url == "http://127.0.0.1:7890"
     assert netproxy.config() is app.config.network
     assert app.config_path.exists()
+
+
+def test_disabling_saved_proxy_reconnects_and_survives_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _make_app(tmp_path)
+    monkeypatch.setenv("TGBOT_PROXY_ENABLED", "true")
+    app.config.network.enabled = True
+    app.config.network.proxy_url = "http://127.0.0.1:7890"
+    netproxy.configure(app.config.network)
+    with patch.object(app, "_schedule_telegram_restart") as restart:
+        result = app.update_network_settings({"enabled": False})
+        restart.assert_called_once_with()
+    assert result["restarting"] is True
+    assert result["active"] is False
+    assert AppConfig.load(app.config_path).network.enabled is False
+
+
+def test_web_only_changes_do_not_reconnect_telegram(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    app.config.network.enabled = True
+    app.config.network.proxy_url = "http://127.0.0.1:7890"
+    with patch.object(app, "_schedule_telegram_restart") as restart:
+        result = app.update_network_settings({"proxy_for_web": False})
+        restart.assert_not_called()
+    assert result["restarting"] is False
 
 
 def test_update_network_settings_rejects_bad_url(tmp_path: Path) -> None:
@@ -403,6 +427,16 @@ def test_client_telegram_follows_telegram_flag_not_web_flag(monkeypatch: pytest.
     cfg.proxy_for_web = True
     netproxy.client_telegram(timeout=5)
     assert "proxy" not in seen[-1]
+    assert seen[-1]["trust_env"] is False
+
+
+def test_local_http_target_ignores_environment_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    with patch.object(netproxy.httpx, "Client") as client:
+        netproxy.client_for("http://momo:8080")
+    client.assert_called_once_with(trust_env=False)
 
 
 def test_personal_checkin_sender_passes_telethon_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -61,7 +61,7 @@ services:
 | 磁力数据导入（momo 专用） | 群内回复 CSV + `/导入`，上传前按哈希向 momo 预检排重 |
 | 频道自动采集 | 独立个人会话读频道 ed2k 帖，解析番号与封面后写入 momo |
 | 消息转发 / 媒体工具 / 小游戏 / 归档 | 转发复制、GIF、词云、贴纸、幸运词、SQLite 文本归档 |
-| 管理后台 | 模块开关、配置、运行状态、日志、AI 用量；Telegram 凭证与个人会话都能在网页里填/登录/自检 |
+| 管理后台 | 模块开关（左侧仅展示已启用模块）、配置、运行状态、日志、AI 用量；Telegram 凭证与个人会话都能在网页里填/登录/自检 |
 
 ## 两条重点链路
 
@@ -153,7 +153,7 @@ python3 scripts/repair_missing_covers.py --limit 50  # 默认每 10 秒一条
 
 常用环境变量：`TGBOT_ADMIN_HOST`、`TGBOT_ADMIN_PORT`、`TGBOT_ADMIN_USERNAME`、`TGBOT_ADMIN_PASSWORD`、`TGBOT_DATA_DIR`、`TGBOT_TELEGRAM_API_ID`、`TGBOT_TELEGRAM_API_HASH`、`TGBOT_TELEGRAM_BOT_TOKEN`。
 
-聊天归档默认只存监听范围内的新消息；群友画像与 AI 功能会把处理所需内容发到你自己配置的模型服务。公开镜像与源码包不含凭据、会话、聊天数据库和运行日志。
+聊天归档默认只存监听范围内的新消息。未选择群组时暂停监听，如需接收所有会话（含私聊），在「系统设置 → 监听群组」开启「监听所有会话」。群友画像与 AI 功能会把处理所需内容发到你自己配置的模型服务。公开镜像与源码包不含凭据、会话、聊天数据库和运行日志。
 
 ## 文档
 

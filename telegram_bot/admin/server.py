@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import binascii
-import html
 import hmac
 import json
 import logging
 import mimetypes
+import re
 import secrets
 import threading
+import time
 import urllib.parse
 from http.cookies import SimpleCookie
 from http import HTTPStatus
@@ -21,6 +22,15 @@ from telegram_bot.logging_setup import list_log_files, read_log_tail
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "telegrambot_admin_session"
+_SESSION_TTL_SECONDS = 7 * 86400
+_MAX_SESSION_TOKENS = 64
+_LOGIN_FAIL_WINDOW_SECONDS = 300.0
+_LOGIN_FAIL_MAX = 10
+_MAX_BODY_BYTES = 5 * 1024 * 1024
+
+
+class _PayloadTooLargeError(Exception):
+    pass
 
 
 def _admin_auth_enabled(admin: Any) -> bool:
@@ -56,9 +66,31 @@ def _cookie_value(header: str, name: str) -> str:
     return morsel.value if morsel is not None else ""
 
 
-def _session_auth_ok(cookie_header: str, active_tokens: set[str]) -> bool:
+def _session_auth_ok(
+    cookie_header: str,
+    active_tokens: set[str] | dict[str, float],
+    lock: threading.Lock | None = None,
+) -> bool:
     token = _cookie_value(cookie_header, SESSION_COOKIE_NAME)
-    return bool(token and token in active_tokens)
+    if not token:
+        return False
+    if isinstance(active_tokens, dict):
+        now = time.time()
+        if lock is not None:
+            with lock:
+                expire_ts = active_tokens.get(token)
+                if expire_ts is None:
+                    return False
+                if expire_ts <= now:
+                    active_tokens.pop(token, None)
+                    return False
+                return True
+        expire_ts = active_tokens.get(token)
+        if expire_ts is None or expire_ts <= now:
+            active_tokens.pop(token, None)
+            return False
+        return True
+    return token in active_tokens
 
 
 def _new_session_token() -> str:
@@ -66,7 +98,7 @@ def _new_session_token() -> str:
 
 
 def _session_cookie(token: str) -> str:
-    return f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+    return f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={_SESSION_TTL_SECONDS}; HttpOnly; SameSite=Lax"
 
 
 def _clear_session_cookie() -> str:
@@ -78,7 +110,10 @@ class AdminServer:
         self.app = app
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
-        self.session_tokens: set[str] = set()
+        self.session_tokens: dict[str, float] = {}
+        self._session_lock = threading.Lock()
+        self._login_failures: dict[str, list[float]] = {}
+        self._config_update_lock = threading.Lock()
 
     def start(self) -> None:
         handler = self._handler_class()
@@ -107,6 +142,9 @@ class AdminServer:
         app = self.app
         static_dir = Path(__file__).resolve().parent / "static"
         session_tokens = self.session_tokens
+        session_lock = self._session_lock
+        login_failures = self._login_failures
+        config_update_lock = self._config_update_lock
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "TelegramBotAdmin/0.1"
@@ -128,16 +166,20 @@ class AdminServer:
 
             def do_POST(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
-                if parsed.path == "/api/login":
-                    self._handle_login()
-                    return
-                if parsed.path == "/api/logout":
-                    self._handle_logout()
-                    return
-                if not self._require_auth(parsed.path):
-                    return
-                if parsed.path.startswith("/api/"):
-                    self._handle_api_post(parsed)
+                try:
+                    if parsed.path == "/api/login":
+                        self._handle_login()
+                        return
+                    if parsed.path == "/api/logout":
+                        self._handle_logout()
+                        return
+                    if not self._require_auth(parsed.path):
+                        return
+                    if parsed.path.startswith("/api/"):
+                        self._handle_api_post(parsed)
+                        return
+                except _PayloadTooLargeError:
+                    self._json({"ok": False, "error": "request body too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
                     return
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -146,21 +188,71 @@ class AdminServer:
                 if not self._require_auth(parsed.path):
                     return
                 if parsed.path.startswith("/api/"):
-                    self._handle_api_put(parsed)
+                    try:
+                        body = self._body_json()
+                    except _PayloadTooLargeError:
+                        self._json({"ok": False, "error": "request body too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                        return
+                    try:
+                        with config_update_lock:
+                            self._handle_api_put(parsed, body)
+                    except ConnectionError:
+                        return
+                    except OSError:
+                        logger.exception("Failed to save admin configuration")
+                        self._json(
+                            {"ok": False, "error": "无法保存配置，请检查数据目录和日志"},
+                            HTTPStatus.INTERNAL_SERVER_ERROR,
+                        )
                     return
                 self.send_error(HTTPStatus.NOT_FOUND)
+
+            def _client_ip(self) -> str:
+                addr = getattr(self, "client_address", None)
+                return str(addr[0]) if isinstance(addr, tuple) and addr else "unknown"
+
+            def _is_rate_limited(self, ip: str) -> bool:
+                now = time.time()
+                cutoff = now - _LOGIN_FAIL_WINDOW_SECONDS
+                with session_lock:
+                    attempts = [ts for ts in login_failures.get(ip, []) if ts > cutoff]
+                    if attempts:
+                        login_failures[ip] = attempts
+                    else:
+                        login_failures.pop(ip, None)
+                    return len(attempts) >= _LOGIN_FAIL_MAX
+
+            def _record_login_failure(self, ip: str) -> None:
+                now = time.time()
+                cutoff = now - _LOGIN_FAIL_WINDOW_SECONDS
+                with session_lock:
+                    attempts = [ts for ts in login_failures.get(ip, []) if ts > cutoff]
+                    attempts.append(now)
+                    login_failures[ip] = attempts
+
+            def _clear_login_failures(self, ip: str) -> None:
+                with session_lock:
+                    login_failures.pop(ip, None)
 
             def _require_auth(self, path: str) -> bool:
                 if not _admin_auth_enabled(app.config.admin):
                     return True
                 if self._is_authenticated():
                     return True
-                if _basic_auth_ok(
-                    self.headers.get("Authorization", ""),
-                    app.config.admin.username,
-                    app.config.admin.password,
-                ):
-                    return True
+                auth_header = self.headers.get("Authorization", "")
+                if auth_header.startswith("Basic "):
+                    ip = self._client_ip()
+                    if self._is_rate_limited(ip):
+                        self._json({"error": "too many failed attempts"}, HTTPStatus.TOO_MANY_REQUESTS)
+                        return False
+                    if _basic_auth_ok(
+                        auth_header,
+                        app.config.admin.username,
+                        app.config.admin.password,
+                    ):
+                        self._clear_login_failures(ip)
+                        return True
+                    self._record_login_failure(ip)
                 if self.command == "GET" and not path.startswith("/api/"):
                     self._redirect(f"/login?next={urllib.parse.quote(self.path or '/', safe='')}")
                     return False
@@ -170,26 +262,40 @@ class AdminServer:
             def _is_authenticated(self) -> bool:
                 if not _admin_auth_enabled(app.config.admin):
                     return True
-                return _session_auth_ok(self.headers.get("Cookie", ""), session_tokens)
+                return _session_auth_ok(self.headers.get("Cookie", ""), session_tokens, session_lock)
 
             def _handle_login(self) -> None:
                 if not _admin_auth_enabled(app.config.admin):
                     self._json({"ok": True, "auth_enabled": False})
                     return
+                ip = self._client_ip()
+                if self._is_rate_limited(ip):
+                    self._json({"ok": False, "error": "too many failed attempts"}, HTTPStatus.TOO_MANY_REQUESTS)
+                    return
                 body = self._body_json()
                 username = str(body.get("username") or "")
                 password = str(body.get("password") or "")
                 if not _credentials_ok(username, password, app.config.admin.username, app.config.admin.password):
+                    self._record_login_failure(ip)
                     self._json({"ok": False, "error": "invalid credentials"}, HTTPStatus.UNAUTHORIZED)
                     return
+                self._clear_login_failures(ip)
                 token = _new_session_token()
-                session_tokens.add(token)
+                now = time.time()
+                with session_lock:
+                    for expired_key in [k for k, exp in session_tokens.items() if exp <= now]:
+                        session_tokens.pop(expired_key, None)
+                    while len(session_tokens) >= _MAX_SESSION_TOKENS:
+                        oldest = min(session_tokens, key=lambda k: session_tokens[k])
+                        session_tokens.pop(oldest, None)
+                    session_tokens[token] = now + _SESSION_TTL_SECONDS
                 self._json({"ok": True}, headers={"Set-Cookie": _session_cookie(token)})
 
             def _handle_logout(self) -> None:
                 token = _cookie_value(self.headers.get("Cookie", ""), SESSION_COOKIE_NAME)
                 if token:
-                    session_tokens.discard(token)
+                    with session_lock:
+                        session_tokens.pop(token, None)
                 self._json({"ok": True}, headers={"Set-Cookie": _clear_session_cookie()})
 
             def _serve_login(self, parsed: urllib.parse.ParseResult) -> None:
@@ -228,7 +334,7 @@ class AdminServer:
                     if not module:
                         self.send_error(HTTPStatus.NOT_FOUND)
                         return
-                    self._json(module.card.__dict__)
+                    self._json(module.card.public_dict())
                 elif parsed.path == "/api/ai":
                     self._json(app.ai_snapshot())
                 elif parsed.path == "/api/ai/usage":
@@ -272,7 +378,11 @@ class AdminServer:
                     )
                 elif parsed.path == "/api/logs/read":
                     name = query.get("file", [app.config.logs.file_name])[0]
-                    lines = int(query.get("lines", ["300"])[0])
+                    try:
+                        lines = int(query.get("lines", ["300"])[0])
+                    except (TypeError, ValueError):
+                        lines = 300
+                    lines = max(1, min(lines, 5000))
                     try:
                         self._json({"name": name, "content": read_log_tail(app.config.logs, app.project_root, name, lines)})
                     except (FileNotFoundError, ValueError):
@@ -314,8 +424,7 @@ class AdminServer:
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
 
-            def _handle_api_put(self, parsed: urllib.parse.ParseResult) -> None:
-                body = self._body_json()
+            def _handle_api_put(self, parsed: urllib.parse.ParseResult, body: dict[str, Any]) -> None:
                 if parsed.path == "/api/ai":
                     self._json({"ok": True, "ai": app.update_ai_config(body)})
                 elif parsed.path == "/api/settings/telegram":
@@ -373,22 +482,28 @@ class AdminServer:
             def _download_log(self, name: str) -> None:
                 log_dir = (app.project_root / app.config.logs.dir).resolve()
                 target = (log_dir / name).resolve()
-                if log_dir not in target.parents or not target.exists():
+                if log_dir not in target.parents or not target.exists() or not target.is_file():
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 data = target.read_bytes()
+                safe_filename = re.sub(r'["\r\n]+', "_", target.name)
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{safe_filename}"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
 
             def _body_json(self) -> dict[str, Any]:
-                length = int(self.headers.get("Content-Length", "0"))
-                if not length:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
                     return {}
-                raw = self.rfile.read(length).decode("utf-8")
+                if length <= 0:
+                    return {}
+                if length > _MAX_BODY_BYTES:
+                    raise _PayloadTooLargeError()
+                raw = self.rfile.read(length).decode("utf-8", errors="replace")
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
@@ -410,7 +525,7 @@ class AdminServer:
 
 
 def _login_page(next_url: str) -> str:
-    safe_next = html.escape(next_url, quote=True)
+    safe_next_js = json.dumps(next_url).replace("</", "<\\/")
     return f"""<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -517,7 +632,7 @@ def _login_page(next_url: str) -> str:
       </form>
     </main>
     <script>
-      const nextUrl = "{safe_next}";
+      const nextUrl = {safe_next_js};
       document.getElementById("loginForm").addEventListener("submit", async (event) => {{
         event.preventDefault();
         const form = event.currentTarget;

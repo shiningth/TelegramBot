@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import deque
 from collections.abc import AsyncIterator
@@ -97,6 +98,7 @@ class TelegramAdapter:
         self.config = config
         self.project_root = project_root
         self.callback = callback
+        self._connection_lock = asyncio.Lock()
         self.client: Any | None = None
         self._programmatic_messages = ProgrammaticMessageTracker()
         self.connected = False
@@ -104,6 +106,17 @@ class TelegramAdapter:
         self.username = ""
 
     async def start(self) -> None:
+        async with self._connection_lock:
+            if self.client is None:
+                await self._start()
+
+    async def reconnect(self) -> None:
+        async with self._connection_lock:
+            await self._stop()
+            await self._start()
+
+    async def _start(self) -> None:
+        self.last_error = ""
         if not self.config.enabled:
             logger.info("Telegram adapter disabled by config")
             return
@@ -132,39 +145,61 @@ class TelegramAdapter:
                 "Run ./nas-conda-setup.sh and restart the process."
             )
 
+        bot_token = self.config.bot_token
+        bot_id = None
+        if bot_token:
+            identifier, separator, secret = bot_token.partition(":")
+            if not separator or not secret or not identifier.isascii() or not identifier.isdecimal():
+                self.last_error = "Telegram Bot Token 格式无效"
+                logger.warning(self.last_error)
+                return
+            bot_id = int(identifier)
+
         session_dir = Path(self.config.session_dir)
         if not session_dir.is_absolute():
             session_dir = self.project_root / session_dir
         session_dir.mkdir(parents=True, exist_ok=True)
         session_path = session_dir / self.config.session_name
+        if bot_id is not None:
+            name = session_path.name.removesuffix(".session")
+            session_path = session_path.with_name(f"{name}.bot-{bot_id}.session")
 
-        self.client = TelegramClient(
+        client = TelegramClient(
             str(session_path),
             self.config.api_id,
             self.config.api_hash,
             proxy=netproxy.telethon_proxy(),
         )
+        try:
+            if bot_id is None:
+                await client.start()
+            else:
+                await client.start(bot_token=bot_token)
+            me = await client.get_me()
+        except BaseException:
+            await client.disconnect()
+            raise
+
+        if bot_id is not None and (not getattr(me, "bot", False) or getattr(me, "id", None) != bot_id):
+            self.last_error = "Telegram 会话与配置的 Bot 身份不一致"
+            logger.error(self.last_error)
+            await client.disconnect()
+            return
+
+        self.client = client
+        self._programmatic_messages = ProgrammaticMessageTracker()
         self._install_programmatic_message_tracking()
 
-        @self.client.on(events.NewMessage)
+        @client.on(events.NewMessage)
         async def _on_message(event: Any) -> None:
             await self._handle_monitored_event(event, "message")
 
-        @self.client.on(events.MessageEdited)
+        @client.on(events.MessageEdited)
         async def _on_message_edited(event: Any) -> None:
             await self._handle_monitored_event(event, "edited message")
 
-        if self.config.bot_token:
-            await self.client.start(bot_token=self.config.bot_token)
-        else:
-            await self.client.start()
-        self.connected = True
-        self.last_error = ""
-        try:
-            me = await self.client.get_me()
-        except Exception:  # noqa: BLE001 - 拿不到自己信息不影响运行
-            me = None
         self.username = str(getattr(me, "username", "") or "")
+        self.connected = True
         logger.info("Telegram adapter connected")
 
     async def _handle_monitored_event(self, event: Any, event_name: str) -> None:
@@ -173,9 +208,15 @@ class TelegramAdapter:
             await self.callback(event)
 
     async def stop(self) -> None:
-        if self.client is not None:
-            await self.client.disconnect()
+        async with self._connection_lock:
+            await self._stop()
+
+    async def _stop(self) -> None:
+        client, self.client = self.client, None
         self.connected = False
+        self.username = ""
+        if client is not None:
+            await client.disconnect()
         logger.info("Telegram adapter stopped")
 
     async def list_groups(self) -> list[dict[str, Any]]:
@@ -188,15 +229,12 @@ class TelegramAdapter:
         for dialog in dialogs:
             entity = dialog.entity
             is_group = bool(getattr(dialog, "is_group", False))
-            is_channel = bool(getattr(dialog, "is_channel", False))
             megagroup = bool(getattr(entity, "megagroup", False))
             broadcast = bool(getattr(entity, "broadcast", False))
             if not (is_group or megagroup or broadcast):
                 continue
 
-            chat_id = str(getattr(entity, "id", getattr(dialog, "id", "")))
-            if chat_id and not chat_id.startswith("-100") and (is_channel or megagroup or broadcast):
-                chat_id = f"-100{chat_id}"
+            chat_id = str(dialog.id)
             username = getattr(entity, "username", "") or ""
             targets = {chat_id}
             if username:
@@ -226,16 +264,13 @@ class TelegramAdapter:
         for dialog in dialogs:
             entity = dialog.entity
             is_group = bool(getattr(dialog, "is_group", False))
-            is_channel = bool(getattr(dialog, "is_channel", False))
             megagroup = bool(getattr(entity, "megagroup", False))
             broadcast = bool(getattr(entity, "broadcast", False))
             is_bot = bool(getattr(entity, "bot", False))
             if not (is_group or megagroup or broadcast or is_bot):
                 continue
 
-            target_id = str(getattr(entity, "id", getattr(dialog, "id", "")))
-            if target_id and not target_id.startswith("-100") and (is_channel or megagroup or broadcast):
-                target_id = f"-100{target_id}"
+            target_id = str(dialog.id)
             username = getattr(entity, "username", "") or ""
             aliases = {target_id}
             if username:
@@ -305,11 +340,13 @@ class TelegramAdapter:
 
             setattr(self.client, method_name, tracked_call)
 
-    def update_monitored_groups(self, groups: list[str], group_meta: dict[str, Any] | None = None) -> None:
-        self.config.monitored_groups = [str(item).strip() for item in groups if str(item).strip()]
+    def update_monitored_groups(
+        self, groups: list[str], group_meta: dict[str, Any] | None = None, *, config: TelegramConfig | None = None
+    ) -> None:
+        config = config if config is not None else self.config
+        config.monitored_groups = [str(item).strip() for item in groups if str(item).strip()]
         if isinstance(group_meta, dict):
-            self.config.monitored_group_meta = _clean_group_meta(group_meta, self.config.monitored_groups)
-        logger.info("Telegram monitored groups updated: %s selected", len(self.config.monitored_groups))
+            config.monitored_group_meta = _clean_group_meta(group_meta, config.monitored_groups)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -318,15 +355,15 @@ class TelegramAdapter:
             "session_name": self.config.session_name,
             "username": self.username,
             "monitored_groups": self.config.monitored_groups,
+            "monitor_all": self.config.monitor_all,
             "last_error": self.last_error,
         }
 
     def _should_monitor(self, event: Any) -> bool:
-        groups = [str(item).strip() for item in self.config.monitored_groups if str(item).strip()]
-        if not groups:
+        if self.config.monitor_all is True:
             return True
         chat_id = str(getattr(event, "chat_id", ""))
-        return chat_id in groups
+        return bool(chat_id) and any(chat_id == str(item).strip() for item in self.config.monitored_groups)
 
     def _log_monitored_message(self, event: Any, event_name: str = "message") -> None:
         message = getattr(event, "message", event)

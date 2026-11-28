@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import html
+import ipaddress
 import json
 import logging
 import mimetypes
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -16,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from telegram_bot.config import AIConfig, AIImageConfig
-from telegram_bot.shared.ai_responses import extract_usage_counts
+from telegram_bot.shared.ai_responses import MAX_MEDIA_BYTES, MAX_MOTION_MEDIA_BYTES, extract_usage_counts
 from telegram_bot.shared.ai_messages import (
     collect_anthropic_text_and_sources,
     is_anthropic_provider,
@@ -27,6 +29,7 @@ from telegram_bot.shared.telegram_media import (
     extract_first_frame_from_path_as_jpeg,
     media_is_motion,
     media_is_tgs_sticker,
+    media_size_bytes,
 )
 from telegram_bot.shared.contracts import HandlerResult
 from telegram_bot.shared.net import ensure_http_url
@@ -250,7 +253,7 @@ class AIImageModule:
 
         caption_prompt = display_prompt if not reference_note else f"{display_prompt}（{reference_note}）"
         caption = format_image_caption(caption_prompt, self.image_model, self.config.image.ratio, self.config.image.size)
-        send_as_document = self._should_send_generated_image_as_document(image_path)
+        send_as_document = await asyncio.to_thread(self._should_send_generated_image_as_document, image_path)
         status_text = "✅ 图片已生成，正在发送原图文件……" if send_as_document else "✅ 图片已生成，正在发送图片……"
         await safe_edit_message(message, status_text, parse_mode="html")
 
@@ -346,6 +349,14 @@ class AIImageModule:
         return effective_prompt, reference_image_path, reference_note
 
     async def _download_reference_image(self, message: Any) -> tuple[Path | None, str]:
+        if media_is_tgs_sticker(message):
+            logger.info("Skipped unsupported Telegram TGS sticker reference media")
+            return None, ""
+        known_size = media_size_bytes(message)
+        max_bytes = MAX_MOTION_MEDIA_BYTES if media_is_motion(message) else MAX_MEDIA_BYTES
+        if known_size and known_size > max_bytes:
+            logger.info("Skipped oversized reference media: bytes=%s limit=%s", known_size, max_bytes)
+            return None, ""
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         try:
             downloaded = await message.download_media(file=self.tmp_dir)
@@ -356,18 +367,14 @@ class AIImageModule:
             return None, ""
         source_path = Path(downloaded)
         try:
-            if media_is_tgs_sticker(message):
-                logger.info("Skipped unsupported Telegram TGS sticker reference media: %s", source_path)
-                _unlink_quietly(source_path)
-                return None, ""
             if media_is_motion(message):
-                frame = extract_first_frame_from_path_as_jpeg(source_path)
+                frame = await asyncio.to_thread(extract_first_frame_from_path_as_jpeg, source_path)
                 if frame:
                     output_path = source_path.with_suffix(".jpg")
-                    output_path.write_bytes(frame)
+                    await asyncio.to_thread(output_path.write_bytes, frame)
                     _unlink_quietly(source_path)
                     return output_path, "引用视频/动图关键帧"
-            normalized = normalize_image_file_to_jpeg(source_path)
+            normalized = await asyncio.to_thread(normalize_image_file_to_jpeg, source_path)
             return normalized, "引用图片/静态贴纸"
         except Exception as exc:
             logger.exception("Reference media conversion failed: %s", exc)
@@ -712,7 +719,10 @@ def format_image_status_message(prompt: str, status: str, model: str, ratio: str
 
 
 def format_image_caption(prompt: str, model: str, ratio: str, size: str) -> str:
-    safe_prompt = html.escape(prompt.strip() or "未提供提示词")
+    raw_prompt = prompt.strip() or "未提供提示词"
+    if len(raw_prompt) > 650:
+        raw_prompt = raw_prompt[:649].rstrip() + "…"
+    safe_prompt = html.escape(raw_prompt)
     safe_model = html.escape(model.strip() or "unknown")
     safe_ratio = html.escape(ratio.strip() or "未配置")
     safe_size = html.escape(size.strip() or "未配置")
@@ -784,17 +794,21 @@ def resolve_image_api_size(display_size: str, ratio: str) -> str:
 
 
 def encode_multipart_formdata(fields: dict[str, str], files: dict[str, tuple[str, bytes, str]]) -> tuple[bytes, str]:
-    boundary = "----TgBotFormBoundary" + str(int(time.time() * 1000))
+    boundary = "----TgBotFormBoundary" + secrets.token_hex(16)
     body = bytearray()
     for name, value in fields.items():
+        safe_name = re.sub(r'["\r\n\x00-\x1f]+', "_", str(name))
         body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{safe_name}"\r\n\r\n'.encode("utf-8"))
         body.extend(str(value).encode("utf-8"))
         body.extend(b"\r\n")
     for name, (filename, content, mime_type) in files.items():
+        safe_name = re.sub(r'["\r\n\x00-\x1f]+', "_", str(name))
+        safe_filename = re.sub(r'["\r\n\x00-\x1f]+', "_", Path(str(filename or "upload.bin")).name) or "upload.bin"
+        safe_mime = re.sub(r"[\r\n\x00-\x1f]+", "", str(mime_type or "application/octet-stream"))
         body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode("utf-8"))
-        body.extend(f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{safe_name}"; filename="{safe_filename}"\r\n'.encode("utf-8"))
+        body.extend(f"Content-Type: {safe_mime}\r\n\r\n".encode("utf-8"))
         body.extend(content)
         body.extend(b"\r\n")
     body.extend(f"--{boundary}--\r\n".encode("utf-8"))
@@ -859,6 +873,47 @@ def resolve_xai_imagine_aspect_ratio(ratio: str) -> str:
     raise ImageProviderConfigError(f"xAI Imagine 不支持比例 {ratio or '空'}；可用值：{allowed}。")
 
 
+_MAX_IMAGE_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+
+def _is_private_image_host(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url).hostname or "").strip().lower()
+    if not host or host in {"localhost", "127.0.0.1", "::1"} or host.endswith((".local", ".lan")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)
+
+
+def _read_bounded_response(response: Any, max_bytes: int = _MAX_IMAGE_DOWNLOAD_BYTES) -> bytes:
+    headers = getattr(response, "headers", None)
+    if headers is not None and hasattr(headers, "get"):
+        raw_len = headers.get("Content-Length")
+        if raw_len is not None:
+            try:
+                if int(raw_len) > max_bytes:
+                    raise RuntimeError(f"图片文件过大（超过 {max_bytes // (1024 * 1024)}MB 限制）")
+            except ValueError:
+                pass
+    buf = bytearray()
+    while True:
+        try:
+            chunk = response.read(65536)
+        except TypeError:
+            data = response.read()
+            if len(data) > max_bytes:
+                raise RuntimeError(f"图片文件过大（超过 {max_bytes // (1024 * 1024)}MB 限制）")
+            return data
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            raise RuntimeError(f"图片文件过大（超过 {max_bytes // (1024 * 1024)}MB 限制）")
+    return bytes(buf)
+
+
 def save_image_api_result(
     data: dict[str, Any],
     output_path: Path,
@@ -877,13 +932,15 @@ def save_image_api_result(
     image_url = item.get("url")
     if image_url:
         safe_image_url = ensure_http_url(image_url)
+        if _is_private_image_host(safe_image_url) and not (api_base_url and same_http_origin(safe_image_url, api_base_url)):
+            raise ValueError("拒绝从非同源内网地址下载图片")
         image_request = urllib.request.Request(safe_image_url, headers=IMAGE_DOWNLOAD_HEADERS)
         if api_key and same_http_origin(safe_image_url, api_base_url):
             # Keep the credential out of redirected requests so a provider cannot
             # forward it to a different image/CDN origin.
             image_request.add_unredirected_header("Authorization", f"Bearer {api_key}")
         with urllib.request.urlopen(image_request, timeout=timeout_seconds) as response:
-            output_path.write_bytes(response.read())
+            output_path.write_bytes(_read_bounded_response(response))
         return output_path
     raise RuntimeError(f"图片 API 未返回 b64_json 或 url：{data}")
 

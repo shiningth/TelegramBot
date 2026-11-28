@@ -713,3 +713,76 @@ def test_browser_solves_turnstile_then_posts_form_itself(monkeypatch):
     assert seen["ua"] == "UA/1.0"
 
 
+def test_is_due_complex_cron_does_not_repeat_within_same_minute() -> None:
+    site = SiteCheckinSiteConfig(id="x", name="X", url="https://x/", cron="10 8 * * 1-5")
+    now = datetime(2026, 11, 13, 8, 10, 45)
+    assert is_due(site, now, None) is True
+    assert is_due(site, now, datetime(2026, 11, 13, 8, 10, 5)) is False
+    assert is_due(site, datetime(2026, 11, 16, 8, 10, 5), datetime(2026, 11, 13, 8, 10, 5)) is True
+
+
+def test_sign_site_sets_login_state_and_blocks_cross_origin_slider(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            if "slide_check" in url:
+                return _Resp('const u = "https://evil.example/set_access_token-abc";')
+            return _Resp("<a href='login.php'>请先登录</a>")
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FakeClient)
+    login_res = sign_site(url="https://pt.0ff.cc/attendance.php", cookie="a=b", method="get")
+    assert login_res.state == "login"
+
+    slider_err = sitecheckin._solve_slider(
+        FakeClient(),
+        '<script src="/slide_check_1.js"></script>',
+        "https://pt.0ff.cc/attendance.php",
+    )
+    assert "跨站" in slider_err
+
+
+def test_quiz_network_error_does_not_raise(monkeypatch) -> None:
+    class FailingClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            raise sitecheckin.httpx.ConnectError("network down")
+
+    monkeypatch.setattr(sitecheckin.httpx, "Client", FailingClient)
+    res = sign_site(url="https://tjupt.org/attendance.php", cookie="a=b", method="quiz")
+    assert res.state == "failed"
+
+
+def test_site_checkin_update_config_preserves_notify_token_and_retry_fields(tmp_path) -> None:
+    module = SiteCheckinModule(
+        make_card(),
+        SiteCheckinConfig(
+            enabled=True,
+            notify_bot_token="12345:keep-secret",
+            retry_failed_minutes=25,
+            max_attempts_per_day=5,
+            state_store=str(tmp_path / "state.json"),
+        ),
+        project_root=tmp_path,
+    )
+    module.update_config({"notify_bot_token": "", "notify_chat_id": "999"})
+    assert module.config.notify_bot_token == "12345:keep-secret"
+    assert module.config.retry_failed_minutes == 25
+    assert module.config.max_attempts_per_day == 5
+
+

@@ -19,6 +19,16 @@ Keep pull_policy: never on this NAS; the image is built locally and only then pu
 Preserve all existing bind mounts and environment settings.
 Verify container health, /login and authenticated admin functionality after deployment.
 
+## 2026.11.28.1
+
+- 管理后台侧栏「功能模块」改为仅显示已启用模块（`syncModuleSidebar()` 按 `module.enabled` 聚合共享视图：`checkin`/`site_checkin` 共用 `moduleCheckin`，`magnet_import`/`ltx_watch` 共用 `moduleMagnetImport`），0 个启用模块时自动隐藏子列表与折叠箭头，初始标记 `hidden` 避免首屏闪烁。
+- 全仓代码审查与安全/稳定性加固：
+  - 监听范围默认收敛：`telegram.monitor_all` 默认为 `false`（未选群组时暂停监听，面板「系统设置 → 监听群组」新增「监听所有会话」开关），同步更新 `config.example.json` 与 `README.md`。
+  - 管理后台与配置加固：补充会话 TTL 过期管理、登录失败限流、请求体大小限制、登录页 `next` 参数安全编码、API 快照脱敏仅返回密钥存在状态、配置文件原子写入（`write_json_atomic`）及环境变量密钥类型保持。
+  - 网络代理与连接修复：局域网目标忽略环境变量代理、禁用已保存代理后自动重连且重启保留、仅修改网页代理不触发 Telegram 重连、Bot 重连账号级 session 隔离与身份校验。
+  - 业务模块修复：LTX 频道增量轮询顺序与超时/失败状态恢复；站点签到防跨域滑块、复杂 cron 去重、登录态与题库容错、配置更新保留通知 token；AI 回复零值/空值保留与 HTML 安全截断、语录命令边界、小游戏结算等待及 AI 用量 `all` 统计跨度修复。
+- 测试：新增侧栏与全仓回归测试（含 `tests/test_usage.py`），全套 `483 passed, 1 skipped`。
+
 ## 2026.11.25.2
 
 - 修「测试代理」在共享/机场代理节点上因 `ipinfo.io` 限流误报 `HTTP 429`：`netproxy.test_proxy()` 与 `direct_ip()` 改为多源回退（`cloudflare cdn-cgi/trace` → `api.ip.sb/geoip` → `ipinfo.io/json` → `api.ipify.org`）；全部查 IP 源均被限流时，继续用 `Google 204` → `GitHub` → `Telegram API` 验证连通性，连通即判定通过并附提示，不再误报不可用。

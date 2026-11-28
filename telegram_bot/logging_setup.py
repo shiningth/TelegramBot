@@ -57,7 +57,11 @@ class RecentLogBuffer(logging.Handler):
             self.records = self.records[-self.capacity :]
 
     def tail(self, limit: int = 100) -> list[dict[str, str]]:
-        return self.records[-limit:]
+        self.acquire()
+        try:
+            return list(self.records[-limit:])
+        finally:
+            self.release()
 
 
 def configure_logging(config: LogConfig, project_root: Path) -> RecentLogBuffer:

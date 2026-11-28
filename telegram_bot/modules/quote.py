@@ -385,8 +385,12 @@ def _strip_prefix(text: str, prefixes: list[str]) -> str | None:
             return ""
         if lowered.startswith(prefix.lower()):
             rest = stripped[len(prefix):]
-            if not rest or rest[0].isspace() or prefix.startswith("/"):
+            if not rest or rest[0].isspace():
                 return rest.strip()
+            if prefix.startswith("/") and rest.startswith("@"):
+                mention_match = re.match(r"^@[A-Za-z0-9_]+(?:\s+(.*))?$", rest, flags=re.DOTALL)
+                if mention_match:
+                    return (mention_match.group(1) or "").strip()
     return None
 
 
@@ -607,6 +611,9 @@ async def _build_media(message: Any) -> dict[str, Any] | None:
         is_sticker = telegram_media.media_has_sticker_attribute(message)
         is_tgs = telegram_media.media_is_tgs_sticker(message)
         is_motion = telegram_media.media_is_motion(message)
+        known_size = telegram_media.media_size_bytes(message)
+        if known_size and known_size > MAX_QUOTE_MEDIA_BYTES:
+            return None
         buffer = await message.download_media(file=bytes)
         if not buffer or len(buffer) > MAX_QUOTE_MEDIA_BYTES:
             return None

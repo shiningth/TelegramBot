@@ -251,6 +251,32 @@ def _cf_blocked(resp: httpx.Response) -> bool:
     return any(marker in head for marker in _CF_MARKERS)
 
 
+def _same_origin(first_url: str, second_url: str) -> bool:
+    try:
+        first = urlsplit(first_url)
+        second = urlsplit(second_url)
+    except ValueError:
+        return False
+    f_scheme = (first.scheme or "").lower()
+    s_scheme = (second.scheme or "").lower()
+    if f_scheme not in {"http", "https"} or f_scheme != s_scheme:
+        return False
+    f_port = first.port or (443 if f_scheme == "https" else 80)
+    s_port = second.port or (443 if s_scheme == "https" else 80)
+    return (first.hostname or "").lower() == (second.hostname or "").lower() and f_port == s_port
+
+
+def _scoped_cookies(cookie: str, url: str) -> httpx.Cookies:
+    jar = httpx.Cookies()
+    host = (urlsplit(url).hostname or "").lower()
+    for name, value in parse_cookie(cookie).items():
+        if host:
+            jar.set(name, value, domain=host, path="/")
+        else:
+            jar.set(name, value)
+    return jar
+
+
 def _solve_slider(
     client: httpx.Client, html: str, base_url: str, *, attempts: int = 3
 ) -> str:
@@ -278,6 +304,8 @@ def _solve_slider(
             time.sleep(1.0)
             continue
         js_url = urljoin(base_url, match.group(1))
+        if not _same_origin(js_url, base_url):
+            return "滑块脚本地址跨站，已拦截"
         try:
             js = client.get(
                 js_url, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"}
@@ -291,9 +319,12 @@ def _solve_slider(
             last = "滑块脚本里没有找到验证地址"
             time.sleep(1.0)
             continue
+        token_url = token.group(0)
+        if not _same_origin(token_url, base_url):
+            return "滑块验证地址跨站，已拦截"
         try:
             client.get(
-                token.group(0),
+                token_url,
                 headers={"X-Requested-With": "XMLHttpRequest", "Accept": "*/*"},
             )
         except Exception as exc:  # noqa: BLE001
@@ -304,13 +335,29 @@ def _solve_slider(
     return last
 
 
-def _fetch_via_flaresolverr(url: str, endpoint: str, timeout: int) -> str:
+def _fetch_via_flaresolverr(url: str, endpoint: str, timeout: int, cookie: str = "") -> str:
     """用 FlareSolverr 代取页面，返回 HTML；失败返回空串。"""
     if not endpoint:
         return ""
-    payload = {"cmd": "request.get", "url": url, "maxTimeout": max(20, timeout) * 1000}
+    payload: dict[str, Any] = {"cmd": "request.get", "url": url, "maxTimeout": max(20, timeout) * 1000}
+    if cookie:
+        host = urlsplit(url).hostname or ""
+        jar = [
+            {"name": name, "value": value, "domain": host, "path": "/"}
+            for name, value in parse_cookie(cookie).items()
+        ]
+        if jar:
+            payload["cookies"] = jar
+    post_kwargs: dict[str, Any] = {
+        "json": payload,
+        "timeout": max(30, timeout + 20),
+        "trust_env": False,
+    }
+    proxy_url = netproxy.proxy_url_for(endpoint)
+    if proxy_url:
+        post_kwargs["proxy"] = proxy_url
     try:
-        resp = httpx.post(endpoint.rstrip("/") + "/v1", json=payload, timeout=max(30, timeout + 20))
+        resp = httpx.post(endpoint.rstrip("/") + "/v1", **post_kwargs)
         data = resp.json()
     except Exception:  # noqa: BLE001
         return ""
@@ -346,12 +393,16 @@ def _trawl_scrape(
         # Turnstile 首轮解题可能要 60–120 秒，给足服务端预算
         "timeout": max(90, timeout * 3) * 1000,
     }
+    post_kwargs: dict[str, Any] = {
+        "json": payload,
+        "timeout": max(150, timeout * 4),
+        "trust_env": False,
+    }
+    proxy_url = netproxy.proxy_url_for(base)
+    if proxy_url:
+        post_kwargs["proxy"] = proxy_url
     try:
-        resp = httpx.post(
-            base + "/scrape",
-            json=payload,
-            timeout=max(150, timeout * 4),
-        )
+        resp = httpx.post(base + "/scrape", **post_kwargs)
         data = resp.json()
     except Exception:  # noqa: BLE001
         return {}
@@ -413,7 +464,7 @@ def _submit_turnstile_form(
     try:
         with netproxy.client_for(url,
             headers=headers,
-            cookies=parse_cookie(cookie),
+            cookies=_scoped_cookies(cookie, url),
             follow_redirects=True,
             timeout=timeout,
         ) as client:
@@ -467,6 +518,7 @@ def _sign_via_browser(
             result.detail = why or ("今日已签到" if state == "already" else "签到成功")
             return _finish(result, started)
         if state == "login":
+            result.state = "login"
             result.detail = "Cookie 已失效，请重新复制"
             return _finish(result, started)
         if state == "captcha":
@@ -486,6 +538,7 @@ def _sign_via_browser(
                     result.detail = why3 or ("今日已签到" if st3 == "already" else "签到成功")
                     return _finish(result, started)
                 if st3 == "login":
+                    result.state = "login"
                     result.detail = "Cookie 已失效，请重新复制"
                     return _finish(result, started)
                 state, why = st3, why3
@@ -510,6 +563,7 @@ def _sign_via_browser(
             )
             return _finish(result, started)
         if st2 == "login":
+            result.state = "login"
             result.detail = "Cookie 已失效，请重新复制"
             return _finish(result, started)
 
@@ -608,7 +662,7 @@ def _sign_via_quiz(
 
     missing: list[str] = []
     with netproxy.client_for(url,
-        cookies=parse_cookie(cookie), headers=headers, timeout=timeout, follow_redirects=True
+        cookies=_scoped_cookies(cookie, url), headers=headers, timeout=timeout, follow_redirects=True
     ) as client:
         for _ in range(max(1, tries)):
             resp = client.get(url)
@@ -627,6 +681,7 @@ def _sign_via_quiz(
                 result.detail = why or "签到成功"
                 return _finish(result, started)
             if state == "login":
+                result.state = "login"
                 result.detail = "Cookie 已失效，请重新复制"
                 return _finish(result, started)
 
@@ -748,37 +803,37 @@ def sign_site(
         result.detail = "没有填写 Cookie"
         return result
 
-    if method == "quiz":
-        return _sign_via_quiz(
-            result,
-            started,
-            url=url,
-            cookie=cookie,
-            headers=req_headers,
-            timeout=timeout,
-            success_keywords=success_keywords,
-            already_keywords=already_keywords,
-            today=today,
-            table_path=quiz_table or str(Path("runtime/data/site_checkin_quiz.json")),
-        )
-
-    if method == "browser" and flaresolverr:
-        return _sign_via_browser(
-            result,
-            started,
-            url=url,
-            cookie=cookie,
-            endpoint=flaresolverr,
-            timeout=timeout,
-            success_keywords=success_keywords,
-            already_keywords=already_keywords,
-            today=today,
-        )
-
     try:
+        if method == "quiz":
+            return _sign_via_quiz(
+                result,
+                started,
+                url=url,
+                cookie=cookie,
+                headers=req_headers,
+                timeout=timeout,
+                success_keywords=success_keywords,
+                already_keywords=already_keywords,
+                today=today,
+                table_path=quiz_table or str(Path("runtime/data/site_checkin_quiz.json")),
+            )
+
+        if method == "browser" and flaresolverr:
+            return _sign_via_browser(
+                result,
+                started,
+                url=url,
+                cookie=cookie,
+                endpoint=flaresolverr,
+                timeout=timeout,
+                success_keywords=success_keywords,
+                already_keywords=already_keywords,
+                today=today,
+            )
+
         with netproxy.client_for(url,
             headers=req_headers,
-            cookies=cookies,
+            cookies=_scoped_cookies(cookie, url),
             timeout=timeout,
             follow_redirects=True,
         ) as client:
@@ -788,7 +843,7 @@ def sign_site(
             result.final_url = str(resp.url)
 
             if _cf_blocked(resp) and flaresolverr:
-                solved = _fetch_via_flaresolverr(url, flaresolverr, timeout)
+                solved = _fetch_via_flaresolverr(url, flaresolverr, timeout, cookie=cookie)
                 if solved:
                     html = solved
                     resp = httpx.Response(200, text=solved, request=resp.request)
@@ -808,13 +863,14 @@ def sign_site(
                 return _finish(result, started)
 
             if state == "login":
+                result.state = "login"
                 result.detail = "Cookie 已失效，请重新复制"
                 return _finish(result, started)
 
             if state == "captcha":
                 solved = ""
                 if flaresolverr:
-                    solved = _fetch_via_flaresolverr(url, flaresolverr, timeout)
+                    solved = _fetch_via_flaresolverr(url, flaresolverr, timeout, cookie=cookie)
                 if solved:
                     html = solved
                     state, why = classify(
@@ -851,6 +907,7 @@ def sign_site(
                         today=today,
                     )
                 if problem:
+                    result.state = "slider"
                     result.detail = f"滑动认证未通过：{problem}"
                     return _finish(result, started)
                 resp = _get_with_retry(client, url)
@@ -870,6 +927,7 @@ def sign_site(
                     result.detail = why or "签到成功"
                     return _finish(result, started)
                 if state == "slider":
+                    result.state = "slider"
                     result.detail = "滑动认证未通过（token 未被服务端接受，需浏览器）"
                     return _finish(result, started)
 
@@ -881,6 +939,10 @@ def sign_site(
                     return _finish(result, started)
                 parsed = _form_fields(html)
                 action = sign_url or (urljoin(url, parsed[0]) if parsed and parsed[0] else url)
+                if not sign_url and not _same_origin(action, url):
+                    result.state = "failed"
+                    result.detail = "签到表单目标跨站，已拒绝提交"
+                    return _finish(result, started)
                 form_method = (parsed[1] if parsed else "post").upper()
                 fields = dict(parsed[2]) if parsed else {}
                 for name, value in parse_pairs(post_data).items():
@@ -916,6 +978,7 @@ def sign_site(
                     result.detail = why or "签到成功"
                     return _finish(result, started)
                 if state == "login":
+                    result.state = "login"
                     result.detail = "提交后跳到登录页，Cookie 可能已失效"
                     return _finish(result, started)
 
@@ -928,6 +991,7 @@ def sign_site(
             result.detail = f"页面没有找到签到入口（HTTP {result.http}）"
             return _finish(result, started)
     except Exception as exc:  # noqa: BLE001
+        result.state = "failed"
         result.detail = f"{type(exc).__name__}: {exc}"[:200]
         return _finish(result, started)
 

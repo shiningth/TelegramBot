@@ -4,22 +4,30 @@
 - 透明代理/直连环境什么都不用配（`enabled=False` 时全部直连）。
 - 局域网必须绕过：momo、FlareSolverr、TRAWL 都在内网，且 momo 的 DB/IP 是私网地址，
   所以私网 IP、localhost、`.local/.lan` 一律直连，不受 `no_proxy` 影响。
-- httpx 自己会读 `HTTP_PROXY` 环境变量，但 Telethon 不会——所以 Telegram 侧
-  必须由 `telethon_proxy()` 显式返回三元组，交给 `TelegramClient(proxy=...)`。
+- HTTP 与 Telegram 客户端都使用面板设置决定路由，直连不会继承 `HTTP_PROXY`。
 """
 
 from __future__ import annotations
 
 import ipaddress
+import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 _CONFIG: Any = None
 
 _SCHEME_DEFAULT_PORT = {"http": 3128, "https": 3128, "socks5": 1080, "socks5h": 1080, "socks4": 1080}
+_URL_CREDENTIALS_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@")
+
+
+def _redact_proxy_urls(text: str) -> str:
+    return _URL_CREDENTIALS_RE.sub(r"\1***:***@", str(text or ""))
 
 
 def configure(config: Any) -> None:
@@ -57,6 +65,8 @@ def parse_proxy_url(proxy_url: str) -> dict[str, Any] | None:
     if not host:
         return None
     scheme = (parts.scheme or "http").lower()
+    if scheme not in _SCHEME_DEFAULT_PORT:
+        return None
     return {
         "scheme": scheme,
         "host": host,
@@ -71,14 +81,31 @@ def mask_proxy_url(proxy_url: str) -> str:
     spec = parse_proxy_url(proxy_url)
     if not spec:
         return ""
-    auth = f"{spec['username']}:***@" if spec["username"] else ""
-    return f"{spec['scheme']}://{auth}{spec['host']}:{spec['port']}"
+    auth = "***@" if spec["username"] or spec["password"] else ""
+    host = spec["host"]
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{spec['scheme']}://{auth}{host}:{spec['port']}"
 
 
 def _host_of(target: str) -> str:
     raw = (target or "").strip()
+    if not raw:
+        return ""
     if "://" not in raw:
-        return raw.split("/")[0].split(":")[0].lower()
+        candidate = raw.split("/")[0].strip()
+        bare = candidate.strip("[]")
+        try:
+            ipaddress.ip_address(bare)
+            return bare.lower()
+        except ValueError:
+            pass
+        if candidate.startswith("["):
+            try:
+                return (urlsplit("http://" + candidate).hostname or "").lower()
+            except ValueError:
+                return ""
+        return candidate.split(":")[0].lower()
     try:
         return (urlsplit(raw).hostname or "").lower()
     except ValueError:
@@ -129,15 +156,22 @@ def should_bypass(target: str) -> bool:
     return False
 
 
-def client_for(target: str, *, for_web: bool = True, **kwargs: Any) -> httpx.Client:
-    """按目标地址决定要不要代理，返回一个 httpx.Client（调用方用 with 收尾）。"""
+def proxy_url_for(target: str, *, for_web: bool = True) -> str | None:
     cfg = _CONFIG
     if cfg is not None and _active() and getattr(cfg, "proxy_for_web", True) is not False:
         if for_web and not should_bypass(target):
             spec = parse_proxy_url(getattr(cfg, "proxy_url", ""))
             if spec:
-                kwargs.setdefault("proxy", spec["url"])
-    return httpx.Client(**kwargs)
+                return spec["url"]
+    return None
+
+
+def client_for(target: str, *, for_web: bool = True, **kwargs: Any) -> httpx.Client:
+    """按目标地址决定要不要代理，返回一个 httpx.Client（调用方用 with 收尾）。"""
+    proxy_url = proxy_url_for(target, for_web=for_web)
+    if proxy_url:
+        kwargs.setdefault("proxy", proxy_url)
+    return httpx.Client(trust_env=False, **kwargs)
 
 
 def client_external(**kwargs: Any) -> httpx.Client:
@@ -147,7 +181,7 @@ def client_external(**kwargs: Any) -> httpx.Client:
         spec = parse_proxy_url(getattr(cfg, "proxy_url", ""))
         if spec:
             kwargs.setdefault("proxy", spec["url"])
-    return httpx.Client(**kwargs)
+    return httpx.Client(trust_env=False, **kwargs)
 
 
 def client_telegram(**kwargs: Any) -> httpx.Client:
@@ -158,20 +192,34 @@ def client_telegram(**kwargs: Any) -> httpx.Client:
             spec = parse_proxy_url(getattr(cfg, "proxy_url", ""))
             if spec:
                 kwargs.setdefault("proxy", spec["url"])
-    return httpx.Client(**kwargs)
+    return httpx.Client(trust_env=False, **kwargs)
+
+
+def telegram_proxy_route(cfg: Any) -> tuple[str, str, int, str, str] | None:
+    if cfg is None:
+        return None
+    try:
+        is_active = bool(cfg.active())
+    except AttributeError:
+        is_active = bool(getattr(cfg, "enabled", False) and str(getattr(cfg, "proxy_url", "")).strip())
+    if not is_active or not getattr(cfg, "proxy_for_telegram", True):
+        return None
+    spec = parse_proxy_url(getattr(cfg, "proxy_url", ""))
+    if not spec or spec["scheme"] not in _SCHEME_DEFAULT_PORT:
+        return None
+    return spec["scheme"], spec["host"], spec["port"], spec["username"], spec["password"]
 
 
 def telethon_proxy() -> Any:
     """给 TelegramClient(proxy=...) 用；无代理或 socks 依赖缺失时返回 None（直连）。"""
-    cfg = _CONFIG
-    if cfg is None or not _active() or not getattr(cfg, "proxy_for_telegram", True):
+    route = telegram_proxy_route(_CONFIG)
+    if route is None:
         return None
-    spec = parse_proxy_url(getattr(cfg, "proxy_url", ""))
-    if not spec:
-        return None
+    scheme, host, port, username, password = route
     try:
         from python_socks import ProxyType  # type: ignore
     except Exception:
+        logger.warning("python-socks is unavailable; Telethon proxy %s://%s:%s bypassed", scheme, host, port)
         return None
     kinds = {
         "http": ProxyType.HTTP,
@@ -180,17 +228,7 @@ def telethon_proxy() -> Any:
         "socks5": ProxyType.SOCKS5,
         "socks5h": ProxyType.SOCKS5,
     }
-    kind = kinds.get(spec["scheme"])
-    if kind is None:
-        return None
-    return (
-        kind,
-        spec["host"],
-        spec["port"],
-        True,
-        spec["username"] or None,
-        spec["password"] or None,
-    )
+    return kinds[scheme], host, port, True, username or None, password or None
 
 
 _IP_PROBES: tuple[tuple[str, str], ...] = (
@@ -242,7 +280,7 @@ def _probe_ip(client: httpx.Client) -> tuple[dict[str, str] | None, str]:
         try:
             resp = client.get(url)
         except Exception as exc:  # noqa: BLE001
-            last_error = f"{type(exc).__name__}: {exc}"[:200]
+            last_error = _redact_proxy_urls(f"{type(exc).__name__}: {exc}")[:200]
             continue
         if resp.status_code != 200:
             last_error = f"{kind} HTTP {resp.status_code}"
@@ -262,7 +300,7 @@ def _probe_connectivity(client: httpx.Client) -> tuple[str, str]:
         try:
             resp = client.get(url)
         except Exception as exc:  # noqa: BLE001
-            last_error = f"{type(exc).__name__}: {exc}"[:200]
+            last_error = _redact_proxy_urls(f"{type(exc).__name__}: {exc}")[:200]
             continue
         if resp.status_code < 500:
             return name, ""
@@ -273,7 +311,7 @@ def _probe_connectivity(client: httpx.Client) -> tuple[str, str]:
 def direct_ip(*, timeout: float = 8.0) -> str:
     """不经代理探一次出口 IP，用来和代理出口做对照。"""
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=True, trust_env=False) as client:
             parsed, _ = _probe_ip(client)
         return parsed["ip"] if parsed else ""
     except Exception:  # noqa: BLE001
@@ -288,7 +326,7 @@ def test_proxy(proxy_url: str, *, timeout: float = 12.0, compare_direct: bool = 
     started = time.monotonic()
     detail: dict[str, Any] = {"proxy": mask_proxy_url(proxy_url)}
     try:
-        with httpx.Client(proxy=spec["url"], timeout=timeout, follow_redirects=True) as client:
+        with httpx.Client(proxy=spec["url"], timeout=timeout, follow_redirects=True, trust_env=False) as client:
             parsed, ip_err = _probe_ip(client)
             if parsed:
                 elapsed = int((time.monotonic() - started) * 1000)
@@ -324,4 +362,4 @@ def test_proxy(proxy_url: str, *, timeout: float = 12.0, compare_direct: bool = 
             return {"ok": False, "error": conn_err or ip_err, "elapsed_ms": elapsed, **detail}
     except Exception as exc:  # noqa: BLE001 - 面板要把原因显示给人看
         elapsed = int((time.monotonic() - started) * 1000)
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200], "elapsed_ms": elapsed, **detail}
+        return {"ok": False, "error": _redact_proxy_urls(f"{type(exc).__name__}: {exc}")[:200], "elapsed_ms": elapsed, **detail}

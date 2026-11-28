@@ -14,6 +14,7 @@
     "bot_token": "",
     "session_name": "telegram_bot",
     "session_dir": "sessions",
+    "monitor_all": false,
     "monitored_groups": [],
     "monitored_group_meta": {}
   },

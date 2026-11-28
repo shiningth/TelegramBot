@@ -287,3 +287,12 @@ def test_build_quote_user_falls_back_when_enrich_fails() -> None:
     # get_entity 失败时沿用原实体，仍保留原本就有的 last_name
     user = asyncio.run(_build_quote_user(sender, FailingClient(), True))
     assert user["name"] == "无著 😄"
+
+
+def test_parse_quote_command_does_not_hijack_other_slash_commands() -> None:
+    prefixes = ["/q", "语录"]
+    assert parse_quote_command("/qd", prefixes) is None
+    assert parse_quote_command("/quit", prefixes) is None
+    assert parse_quote_command("/quote", prefixes) is None
+    assert parse_quote_command("/q@mybot 2", prefixes) == {"kind": "generate", "count": 2, "with_reply": False}
+    assert parse_quote_command("/q@mybot", prefixes) == {"kind": "generate", "count": 1, "with_reply": False}

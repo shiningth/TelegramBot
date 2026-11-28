@@ -46,7 +46,7 @@ class ModuleRegistry:
         return self._modules.get(module_id)
 
     def cards(self) -> list[dict[str, Any]]:
-        return [module.card.__dict__ for module in self.all()]
+        return [module.card.public_dict() for module in self.all()]
 
     async def start_enabled(self) -> None:
         for module in self.all():

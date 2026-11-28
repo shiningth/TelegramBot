@@ -7,12 +7,12 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from telegram_bot.config import LtxWatchConfig, MagnetImportConfig, TelegramConfig
+from telegram_bot.config import LtxWatchConfig, MagnetImportConfig, TelegramConfig, write_json_atomic
 from telegram_bot.shared.contracts import HandlerResult
 from telegram_bot.shared import netproxy
 from telegram_bot.shared.javdb import code_variants, fetch_meta, search_detail_by_code
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 _STATE_LIMIT = 5000
 _SAMPLE_LIMIT = 5
+_MESSAGE_PAGE_SIZE = 100
+_RETRY_START_SECONDS = 60
+_RETRY_MAX_SECONDS = 3600
 
 # 频道里部分消息在 hash 后还有 115 秒传参数 h=<base32>，必须整段吃进来，
 # 否则链接会被截成 "...|HASH|"（缺收尾斜杠）并被判 unsupported，
@@ -203,8 +206,10 @@ class LtxWatchModule:
         self._search = search_detail_by_code
         self._sleep = sleep
         self._client: Any = None
+        self._client_proxy = None
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self._client_lock = asyncio.Lock()
         self._dryrun_meta_ids: set[int] = set()
         self._state = self._load_state()
         self._sync_card_config()
@@ -213,7 +218,7 @@ class LtxWatchModule:
     # ---------------------------------------------------------------- 生命周期
     async def start(self) -> None:
         self.card.status = "running"
-        if self._task is None:
+        if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop(), name="ltx-watch")
         logger.info("LTX watch started: channel=%s interval=%ss dry_run=%s", self.config.channel, self.config.poll_interval_seconds, self.config.dry_run)
 
@@ -237,23 +242,14 @@ class LtxWatchModule:
             return
         from telegram_bot.config import ltx_watch_config_from_dict
 
-        was_dry_run = self.config.dry_run
-        self.config = ltx_watch_config_from_dict({**self._asdict(), **data})
-        if was_dry_run and not self.config.dry_run:
-            # 从试运行切到真导入：清掉试运行留下的“已处理”记录，让历史消息重新走一遍
-            processed = self._state.get("processed", {})
-            for key in [k for k, v in processed.items() if v.get("status") == "dry-run"]:
-                processed.pop(key, None)
-            self._state["last_message_id"] = 0
-            self._state["window"] = {"since": self._now_text(), "imported": 0, "skipped": 0, "failed": 0}
-            self._save_state()
-            logger.info("LTX watch switched to live mode: 已清空试运行记录，下一轮重新扫描")
+        merged = {**self._asdict(), **data}
+        if not str(merged.get("notify_bot_token") or "").strip():
+            merged["notify_bot_token"] = self.config.notify_bot_token
+        self.config = ltx_watch_config_from_dict(merged)
         self._sync_card_config()
         self._refresh_metrics()
 
     def _asdict(self) -> dict[str, Any]:
-        from dataclasses import asdict
-
         return asdict(self.config)
 
     async def run_once(self) -> dict[str, Any]:
@@ -273,9 +269,7 @@ class LtxWatchModule:
             is_channel = bool(getattr(dialog, "is_channel", False))
             if not (is_group or is_channel or megagroup or broadcast):
                 continue
-            chat_id = str(getattr(entity, "id", getattr(dialog, "id", "")))
-            if chat_id and not chat_id.startswith("-100") and (is_channel or megagroup or broadcast):
-                chat_id = f"-100{chat_id}"
+            chat_id = str(dialog.id)
             groups.append(
                 {
                     "id": chat_id,
@@ -294,8 +288,11 @@ class LtxWatchModule:
     async def _loop(self) -> None:
         while True:
             try:
-                await self._tick()
+                result = await self._tick()
                 await self._maybe_notify()
+                if result.get("has_more"):
+                    await asyncio.sleep(0)
+                    continue
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -305,16 +302,17 @@ class LtxWatchModule:
                 self._record_error(detail[:120] or "同步失败，详见日志")
             await self._sleep(max(30, int(self.config.poll_interval_seconds)))
 
-    async def _resolve_channel(self, client: Any) -> Any:
+    async def _resolve_channel(self, client: Any, *, channel: str | None = None) -> Any:
         """解析监控频道；用户名被取消时给出可操作的提示而不是堆栈。"""
-        target = normalize_channel(self.config.channel)
+        channel = self.config.channel if channel is None else channel
+        target = normalize_channel(channel)
         try:
             return await client.get_entity(target)
         except Exception as exc:  # noqa: BLE001 - 分类型看下面
             from telethon.errors import UsernameInvalidError, UsernameNotOccupiedError
 
             hint = (
-                f"频道 {self.config.channel} 的用户名已失效（可能被频道主取消），"
+                f"频道 {channel} 的用户名已失效（可能被频道主取消），"
                 "请把「监控频道」改成频道数字 ID（形如 -1001234567890）后保存"
             )
             if isinstance(exc, (UsernameNotOccupiedError, UsernameInvalidError)):
@@ -325,92 +323,173 @@ class LtxWatchModule:
 
     async def _tick(self) -> dict[str, Any]:
         async with self._lock:
+            config = self.config
             started = time.monotonic()
             result = {"scanned": 0, "imported": 0, "skipped": 0, "failed": 0, "parsed": 0}
-            if not str(self.config.channel or "").strip():
+            if not str(config.channel or "").strip():
                 logger.warning("LTX watch skipped: 未配置监控频道")
                 result["error"] = "未配置监控频道"
                 return result
             client = await self._ensure_client()
-            entity = await self._resolve_channel(client)
+            entity = await self._resolve_channel(client, channel=config.channel)
+            channel_id = str(getattr(entity, "id", normalize_channel(config.channel)))
+            if self._state["dry_run"] and not config.dry_run:
+                self._reset_dry_run()
+            self._state["dry_run"] = config.dry_run
             last_id = int(self._state.get("last_message_id") or 0)
-            limit = 100
-            if not last_id and self.config.initial_full_scan:
-                limit = int(self.config.max_initial_messages)
-            messages = await client.get_messages(entity, min_id=last_id, limit=limit)
+            if last_id:
+                messages = await client.get_messages(entity, min_id=last_id, limit=_MESSAGE_PAGE_SIZE, reverse=True)
+            else:
+                limit = config.max_initial_messages if config.initial_full_scan else _MESSAGE_PAGE_SIZE
+                messages = await client.get_messages(entity, limit=limit)
             items = sorted(messages, key=lambda m: m.id)
-            self._dryrun_meta_ids = {m.id for m in items[-5:]} if self.config.dry_run else set()
+            self._dryrun_meta_ids = {m.id for m in items[-5:]} if config.dry_run else set()
             result["total_seen"] = len(items)
-            stop_after = int(self.config.backfill_stop_after or 0)
-            consecutive_existing = 0
-            for index, message in enumerate(items, start=1):
-                key = str(message.id)
-                if key in self._state.get("processed", {}):
-                    continue
+            try:
+                if not config.dry_run:
+                    await self._retry_imports(client, entity, channel_id, result, config)
+                await self._scan_messages(items, channel_id, result, config)
+                if last_id and len(items) == _MESSAGE_PAGE_SIZE and not result.get("stopped_early"):
+                    result["has_more"] = True
+                self._state["last_run_at"] = self._now_text()
+                self._state["last_duration"] = round(time.monotonic() - started, 1)
+            finally:
+                self._save_state(config.state_store)
+            self._refresh_metrics(result)
+            logger.info("LTX watch tick done: %s", result)
+            return result
+
+    def _reset_dry_run(self) -> None:
+        self._state["processed"] = {
+            key: item for key, item in self._state["processed"].items() if item.get("status") != "dry-run"
+        }
+        self._state["last_message_id"] = 0
+        self._state["window"] = {"since": self._now_text(), "imported": 0, "skipped": 0, "failed": 0}
+        logger.info("LTX watch switched to live mode: 已清空试运行记录并重新扫描")
+
+    async def _scan_messages(
+        self, items: list[Any], channel_id: str, result: dict[str, Any], config: LtxWatchConfig
+    ) -> None:
+        processed = self._state["processed"]
+        pending = self._state["pending_imports"]
+        stop_after = config.backfill_stop_after
+        consecutive_existing = 0
+        for index, message in enumerate(items, start=1):
+            key = str(message.id)
+            if key not in processed and key not in pending:
                 result["scanned"] += 1
                 self.card.metrics["progress"] = {
                     "done": index,
                     "total": len(items),
-                    "imported": result.get("imported", 0),
-                    "skipped": result.get("skipped", 0),
+                    "imported": result["imported"],
+                    "skipped": result["skipped"],
                 }
-                parsed = parse_message(
-                    getattr(message, "message", "") or "",
-                    message_id=message.id,
-                    date=getattr(message, "date", None),
-                    buttons=self._buttons(message),
-                )
-                if parsed is None or not parsed.code:
+                item = self._parse_message(message)
+                if item is None or not item.code:
                     self._mark(key, message.id, status="skipped", reason="无法解析番号")
-                    result["skipped"] += 1
-                    continue
-                result["parsed"] += 1
-                outcome = await self._handle_item(parsed)
-                if self.config.dry_run and outcome == "imported":
-                    result["would_import"] = result.get("would_import", 0) + 1
+                    outcome = "skipped"
                 else:
-                    result[outcome] = result.get(outcome, 0) + 1
-                # 回补时：连续 N 条都已存在就认为更早的也已入库，提前收工
-                if outcome == "skipped" and "已存在" in str(self._state["processed"].get(key, {}).get("reason", "")):
+                    result["parsed"] += 1
+                    outcome = await self._process_item(item, channel_id, config)
+                count_key = "would_import" if config.dry_run and outcome == "imported" else outcome
+                result[count_key] = result.get(count_key, 0) + 1
+                if outcome == "skipped" and "已存在" in processed[key].get("reason", ""):
                     consecutive_existing += 1
                 else:
                     consecutive_existing = 0
-                self._state["last_message_id"] = max(int(self._state.get("last_message_id") or 0), message.id)
-                if stop_after and consecutive_existing >= stop_after:
-                    result["stopped_early"] = True
-                    logger.info("LTX watch 连续 %s 条已存在，提前结束本轮扫描", consecutive_existing)
-                    break
-            if items:
-                self._state["last_message_id"] = max(int(self._state.get("last_message_id") or 0), max(m.id for m in items))
-            self._state["last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._state["last_duration"] = round(time.monotonic() - started, 1)
-            self._save_state()
-            self._refresh_metrics(result)
-            logger.info("LTX watch tick done: %s", result)
-            return result
+            self._state["last_message_id"] = message.id
+            if stop_after and consecutive_existing >= stop_after:
+                result["stopped_early"] = True
+                logger.info("LTX watch 连续 %s 条已存在，下轮从当前游标继续", consecutive_existing)
+                break
+
+    def _parse_message(self, message: Any) -> ParsedItem | None:
+        return parse_message(
+            getattr(message, "message", "") or "",
+            message_id=message.id,
+            date=getattr(message, "date", None),
+            buttons=self._buttons(message),
+        )
+
+    async def _process_item(self, item: ParsedItem, channel_id: str, config: LtxWatchConfig) -> str:
+        key = str(item.message_id)
+        pending = self._state["pending_imports"]
+        original = asdict(item)
+        original["published_at"] = item.published_at.isoformat() if item.published_at else None
+        try:
+            outcome = await self._handle_item(item, config)
+        except Exception as exc:  # noqa: BLE001 - keep the input for retry after a transient failure
+            if config.dry_run:
+                raise
+            attempts = pending.get(key, {}).get("attempts", 0) + 1
+            delay = min(_RETRY_MAX_SECONDS, _RETRY_START_SECONDS * 2 ** min(attempts - 1, 6))
+            pending[key] = {
+                "item": original,
+                "channel_id": channel_id,
+                "attempts": attempts,
+                "retry_at": time.time() + delay,
+            }
+            logger.exception("LTX watch import failed for %s, retry in %ss", item.code, delay)
+            self._mark(key, item.message_id, status="failed", reason=str(exc)[:200], code=item.code)
+            return "failed"
+        if not config.dry_run:
+            pending.pop(key, None)
+        return outcome
+
+    async def _retry_imports(
+        self, client: Any, entity: Any, channel_id: str, result: dict[str, Any], config: LtxWatchConfig
+    ) -> None:
+        pending = self._state["pending_imports"]
+        now = time.time()
+        due = [
+            (key, entry) for key, entry in pending.items()
+            if entry.get("channel_id", channel_id) == channel_id and entry.get("retry_at", 0) <= now
+        ]
+        for key, entry in due[:_MESSAGE_PAGE_SIZE]:
+            if "item" in entry:
+                data = dict(entry["item"])
+                date = data["published_at"]
+                data["published_at"] = datetime.fromisoformat(date) if date else None
+                item = ParsedItem(**data)
+            else:
+                try:
+                    message = await client.get_messages(entity, ids=int(key))
+                except Exception:  # noqa: BLE001 - retain the legacy record and continue scanning
+                    entry["retry_at"] = time.time() + _RETRY_START_SECONDS
+                    logger.warning("LTX watch could not read previous failed message %s", key, exc_info=True)
+                    continue
+                item = self._parse_message(message) if message is not None else None
+                if item is None or item.code != entry["legacy_code"]:
+                    pending.pop(key)
+                    logger.warning("LTX watch could not recover previous failed message %s", key)
+                    continue
+            outcome = await self._process_item(item, channel_id, config)
+            result[outcome] = result.get(outcome, 0) + 1
+            result["retried"] = result.get("retried", 0) + 1
 
     def _code_variants(self, code: str) -> list[str]:
         """查重用的番号变体：带前缀写法与去前缀写法都试。"""
         return code_variants(code) or [str(code or "")]
 
-    async def _handle_item(self, item: ParsedItem) -> str:
+    async def _handle_item(self, item: ParsedItem, config: LtxWatchConfig) -> str:
         key = str(item.message_id)
-        if item.is_fc2 and not self.config.fc2_import:
+        magnet = self.magnet
+        if item.is_fc2 and not config.fc2_import:
             # 未开启 FC2 入库：只展示，不补封面/演员，也不写入 momo
             self._mark(key, item.message_id, status="fc2", reason="FC2 仅展示，不入库", code=item.code, item=item)
             return "fc2"
-        if not self.config.dry_run:
+        if not config.dry_run:
             # 老数据可能是去前缀写法（LUXU-1006 vs 259LUXU-1006），逐个变体查一遍
             existing = None
             for variant in self._code_variants(item.code):
                 existing = await asyncio.to_thread(
                     self._lookup,
-                    self.magnet.api_base_url,
-                    self.magnet.api_username,
-                    self.magnet.api_password,
+                    magnet.api_base_url,
+                    magnet.api_username,
+                    magnet.api_password,
                     code=variant,
                     ed2k=item.ed2k,
-                    source_site=self.config.source_site,
+                    source_site=config.source_site,
                 )
                 if existing:
                     break
@@ -420,9 +499,9 @@ class LtxWatchModule:
 
         # 试运行时只抓最新几条做样本，避免首轮全量扫描被 JavDB 拖到几十分钟
         # FC2 一律不补封面/演员
-        budget_ok = ((not self.config.dry_run) or item.message_id in self._dryrun_meta_ids) and not item.is_fc2
-        if self.config.fetch_metadata and budget_ok:
-            delay = max(0, int(self.config.metadata_delay_seconds))
+        budget_ok = ((not config.dry_run) or item.message_id in self._dryrun_meta_ids) and not item.is_fc2
+        if config.fetch_metadata and budget_ok:
+            delay = max(0, int(config.metadata_delay_seconds))
             meta: dict[str, str] | None = None
             if delay:
                 await self._sleep(delay)
@@ -432,9 +511,9 @@ class LtxWatchModule:
                 self._meta,
                 item.javdb_url,
                 code=item.code,
-                flaresolverr=self.config.metadata_flaresolverr,
-                retries=self.config.metadata_retries,
-                sources=self.config.metadata_sources,
+                flaresolverr=config.metadata_flaresolverr,
+                retries=config.metadata_retries,
+                sources=config.metadata_sources,
             )
             if meta:
                 item.author = meta.get("author", "") or item.author
@@ -443,35 +522,32 @@ class LtxWatchModule:
                 # 缺封面：先照常入库，记一笔日志；之后可用 scripts/repair_missing_covers.py 补
                 self._note_missing_cover(item.code)
 
-        if self.config.dry_run:
+        if config.dry_run:
             self._mark(key, item.message_id, status="dry-run", code=item.code, item=item)
             return "imported"
 
-        row = self._build_row(item)
-        try:
-            payload = await asyncio.to_thread(
-                self._importer,
-                self.magnet.api_base_url,
-                self.magnet.api_username,
-                self.magnet.api_password,
-                [row],
-                update_existing=False,
-                skip_duplicates=True,
-                timeout=self.magnet.import_timeout_seconds,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("LTX watch import failed for %s", item.code)
-            self._mark(key, item.message_id, status="failed", reason=str(exc)[:200], code=item.code)
-            return "failed"
+        row = self._build_row(item, config)
+        payload = await asyncio.to_thread(
+            self._importer,
+            magnet.api_base_url,
+            magnet.api_username,
+            magnet.api_password,
+            [row],
+            update_existing=False,
+            skip_duplicates=True,
+            timeout=magnet.import_timeout_seconds,
+        )
         stats = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        if int(stats.get("imported_records") or 0) == 0 and int(stats.get("skipped_records") or 0) > 0:
-            self._mark(key, item.message_id, status="skipped", reason="momo 跳过重复", code=item.code)
-            return "skipped"
+        if int(stats.get("imported_records") or 0) == 0:
+            if int(stats.get("skipped_records") or 0) > 0:
+                self._mark(key, item.message_id, status="skipped", reason="momo 跳过重复", code=item.code)
+                return "skipped"
+            raise RuntimeError("momo 未确认导入或跳过该条记录")
         self._mark(key, item.message_id, status="imported", code=item.code, item=item, detail=summarize_import_result(payload, 160))
         return "imported"
 
-    def _build_row(self, item: ParsedItem) -> dict[str, Any]:
-        forum = self.config.forum_name
+    def _build_row(self, item: ParsedItem, config: LtxWatchConfig) -> dict[str, Any]:
+        forum = config.forum_name
         published = item.published_at.strftime("%Y-%m-%d %H:%M:%S") if item.published_at else ""
         return {
             "title": item.title,
@@ -488,33 +564,42 @@ class LtxWatchModule:
             "forum_type": forum,
             "forum_name": forum,
             "magnet_hash": item.magnet_hash,
-            "source_site": self.config.source_site,
+            "source_site": config.source_site,
             "published_at": published,
         }
 
     # ---------------------------------------------------------------- 客户端
     async def _ensure_client(self) -> Any:
-        if self._client is not None and getattr(self._client, "is_connected", lambda: False)():
-            return self._client
-        from telethon import TelegramClient
+        async with self._client_lock:
+            proxy = netproxy.telethon_proxy()
+            if self._client is not None:
+                if self._client_proxy == proxy and self._client.is_connected():
+                    return self._client
+                await self._disconnect_unlocked()
+            from telethon import TelegramClient
 
-        session = self._session_path()
-        if not Path(str(session) + ".session").is_file():
-            raise RuntimeError(f"LTX 采集会话不存在：{session}.session，请先登录")
-        client = TelegramClient(
-            str(session),
-            self.telegram.api_id,
-            self.telegram.api_hash,
-            proxy=netproxy.telethon_proxy(),
-        )
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            raise RuntimeError("LTX 采集会话未登录，请重新执行登录脚本")
-        self._client = client
-        return client
+            session = self._session_path()
+            if not Path(str(session) + ".session").is_file():
+                raise RuntimeError(f"LTX 采集会话不存在：{session}.session，请先登录")
+            client = TelegramClient(
+                str(session),
+                self.telegram.api_id,
+                self.telegram.api_hash,
+                proxy=proxy,
+            )
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                raise RuntimeError("LTX 采集会话未登录，请重新执行登录脚本")
+            self._client = client
+            self._client_proxy = proxy
+            return client
 
     async def _disconnect(self) -> None:
+        async with self._client_lock:
+            await self._disconnect_unlocked()
+
+    async def _disconnect_unlocked(self) -> None:
         client, self._client = self._client, None
         if client is not None:
             try:
@@ -578,9 +663,10 @@ class LtxWatchModule:
                 client = await self._ensure_client()
                 await client.send_message(target, text)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("LTX watch notify failed")
+            safe_err = re.sub(r"bot\d+:[^/\s]+", "bot***", f"{type(exc).__name__}: {exc}")
+            logger.warning("LTX watch notify failed: %s", safe_err[:200])
             self._record_error("汇总通知发送失败")
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
+            return {"ok": False, "error": safe_err[:200]}
         if reset:
             stamp = self._now_text()
             self._state["last_notify_at"] = stamp
@@ -591,13 +677,11 @@ class LtxWatchModule:
         return {"ok": True, "target": target if not self.config.notify_bot_token else (self.config.notify_chat_id or target), "text": text}
 
     def _send_via_bot_api(self, text: str) -> None:
-        import httpx
-
         chat_id = self.config.notify_chat_id or self.config.notify_target
         if not chat_id:
             raise RuntimeError("缺少接收用的 chat_id")
         url = f"https://api.telegram.org/bot{self.config.notify_bot_token}/sendMessage"
-        with netproxy.client_for(url, timeout=20.0) as client:
+        with netproxy.client_telegram(timeout=20.0) as client:
             response = client.post(url, json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
         try:
             data = response.json()
@@ -641,6 +725,7 @@ class LtxWatchModule:
     # ---------------------------------------------------------------- 状态与指标
     def _mark(self, key: str, message_id: int, *, status: str, code: str = "", reason: str = "", item: ParsedItem | None = None, detail: str = "") -> None:
         processed = self._state.setdefault("processed", {})
+        previous_status = processed.get(key, {}).get("status")
         entry: dict[str, Any] = {
             "message_id": message_id,
             "code": code,
@@ -664,7 +749,7 @@ class LtxWatchModule:
         processed[key] = entry
         while len(processed) > _STATE_LIMIT:
             processed.pop(next(iter(processed)))
-        if status in {"imported", "skipped", "failed"} and not self.config.dry_run:
+        if status in {"imported", "skipped", "failed"} and status != previous_status and not self._state["dry_run"]:
             counter = f"{status}_count"
             self._state[counter] = int(self._state.get(counter, 0)) + 1
             window = self._window()
@@ -704,6 +789,7 @@ class LtxWatchModule:
             "skipped": int(self._state.get("skipped_count", 0)),
             "failed": int(self._state.get("failed_count", 0)),
             "pending": len(self._state.get("missing_cover", [])),
+            "pending_imports": len(self._state["pending_imports"]),
             "last_message_id": int(self._state.get("last_message_id", 0)),
             "last_run_at": self._state.get("last_run_at", ""),
             "last_duration": self._state.get("last_duration", 0),
@@ -729,20 +815,23 @@ class LtxWatchModule:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return {"processed": {}, "missing_cover": []}
+            data = {}
         if not isinstance(data, dict):
-            return {"processed": {}, "missing_cover": []}
-        data.setdefault("processed", {})
+            data = {}
+        processed = data.setdefault("processed", {})
+        data.setdefault("dry_run", any(entry.get("status") == "dry-run" for entry in processed.values()))
+        if "pending_imports" not in data:
+            data["pending_imports"] = {
+                key: {"legacy_code": entry["code"]} for key, entry in processed.items()
+                if entry.get("status") == "failed" and entry.get("code") and key.isdecimal()
+            }
         data.setdefault("missing_cover", [])
         return data
 
-    def _save_state(self) -> None:
-        path = self._resolve(self.config.state_store)
+    def _save_state(self, state_store: str | None = None) -> None:
+        path = self._resolve(state_store or self.config.state_store)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(path)
+            write_json_atomic(path, self._state)
         except OSError:
             logger.warning("Failed to save LTX watch state", exc_info=True)
 

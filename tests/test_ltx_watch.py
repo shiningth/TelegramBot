@@ -79,8 +79,15 @@ class FakeClient:
     async def get_entity(self, channel):
         return SimpleNamespace(id=4419698318, title="Jasna LTX 频道")
 
-    async def get_messages(self, entity, min_id=0, limit=100):
-        return [m for m in self.messages if m.id > min_id]
+    async def get_messages(self, entity, min_id=0, limit=100, reverse=False, ids=None):
+        if ids is not None:
+            return next((message for message in self.messages if message.id == ids), None)
+        messages = sorted(
+            (message for message in self.messages if message.id > min_id),
+            key=lambda message: message.id,
+            reverse=not reverse,
+        )
+        return messages[:limit]
 
 
 def make_module(tmp_path: Path, messages, *, dry_run: bool = True, lookup=None, meta=None, channel: str = "testchannel"):
@@ -312,10 +319,11 @@ def test_switching_to_live_mode_resets_dry_run_records(tmp_path: Path) -> None:
     assert state["last_message_id"] == 1940
 
     module.update_config({"dry_run": False})
-    state = json.loads((tmp_path / "runtime/data/ltx_watch_state.json").read_text(encoding="utf-8"))
-    assert "1940" not in state["processed"]
-    assert state["last_message_id"] == 0
     assert module.config.dry_run is False
+    assert asyncio.run(module._tick())["imported"] == 1
+    state = json.loads((tmp_path / "runtime/data/ltx_watch_state.json").read_text(encoding="utf-8"))
+    assert state["processed"]["1940"]["status"] == "imported"
+    assert state["last_message_id"] == 1940
 
 def test_notify_test_sends_without_resetting_window(tmp_path: Path) -> None:
     module = make_module(tmp_path, [], dry_run=False)
@@ -394,6 +402,66 @@ def test_backfill_stops_after_consecutive_existing(tmp_path: Path) -> None:
     assert result.get("stopped_early") is True
     assert result["skipped"] == 2
     assert result["imported"] == 0
+    assert module._state["last_message_id"] == 1901
+    assert asyncio.run(module._tick())["scanned"] == 2
+
+
+def test_incremental_poll_reads_oldest_unseen_page_first(tmp_path: Path) -> None:
+    messages = [_message(message_id, "") for message_id in range(2, 152)]
+    module = make_module(tmp_path, messages)
+    module._state["last_message_id"] = 1
+
+    first = asyncio.run(module._tick())
+    assert first["scanned"] == 100
+    assert first["has_more"] is True
+    assert module._state["last_message_id"] == 101
+    assert asyncio.run(module._tick())["scanned"] == 50
+    assert module._state["last_message_id"] == 151
+    assert set(module._state["processed"]) == {str(message.id) for message in messages}
+
+
+def test_timed_out_import_retries_after_restart(tmp_path: Path, monkeypatch) -> None:
+    from telegram_bot.modules import ltx_watch
+
+    now = 1000.0
+    monkeypatch.setattr(ltx_watch.time, "time", lambda: now)
+    messages = [_message(1940, CHANNEL_TEXT)]
+    module = make_module(tmp_path, messages, dry_run=False)
+    module.config.fetch_metadata = False
+
+    def timeout(*args, **kwargs):
+        raise TimeoutError("test timeout")
+
+    module._importer = timeout
+    assert asyncio.run(module._tick())["failed"] == 1
+    assert module._state["last_message_id"] == 1940
+
+    restarted = make_module(tmp_path, [], dry_run=False)
+    restarted.config.fetch_metadata = False
+    assert asyncio.run(restarted._tick())["imported"] == 0
+
+    now = 1061.0
+    result = asyncio.run(restarted._tick())
+    assert result["retried"] == result["imported"] == 1
+    assert len(restarted.importer_calls) == 1
+    assert restarted._state["pending_imports"] == {}
+
+
+def test_existing_failed_state_is_recovered_from_telegram(tmp_path: Path) -> None:
+    state_path = tmp_path / "runtime/data/ltx_watch_state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({
+        "last_message_id": 1940,
+        "processed": {"1940": {"code": "IPZ-998", "status": "failed"}},
+    }), encoding="utf-8")
+    module = make_module(tmp_path, [_message(1940, CHANNEL_TEXT)], dry_run=False)
+    module.config.fetch_metadata = False
+
+    assert asyncio.run(module._tick())["retried"] == 1
+    assert module._state["processed"]["1940"]["status"] == "imported"
+    assert module._state["pending_imports"] == {}
+
+
 def test_magnet_fingerprint_ignores_filename() -> None:
     from telegram_bot.shared.magnetboard_api import magnet_fingerprint
 
@@ -791,6 +859,7 @@ def test_list_dialogs_returns_groups_from_user_session(tmp_path: Path) -> None:
 
     class Dialog:
         entity = Entity()
+        id = -1000000000123
         is_group = True
         is_channel = False
         title = "群A"
@@ -817,7 +886,7 @@ def test_list_dialogs_returns_groups_from_user_session(tmp_path: Path) -> None:
     module._ensure_client = fake_ensure
     groups = asyncio.run(module.list_dialogs())
     assert [g["title"] for g in groups] == ["群A"]
-    assert groups[0]["id"] == "-100123"
+    assert groups[0]["id"] == "-1000000000123"
     assert groups[0]["kind"] == "group"
 def test_daily_cron_time_parsing() -> None:
     from telegram_bot.modules.ltx_watch import _daily_cron_time

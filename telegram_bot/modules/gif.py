@@ -112,7 +112,8 @@ class GifModule:
             await safe_delete_message(message, "gif_cleanup")
         except Exception as exc:
             logger.exception("Video to GIF failed: %s", exc)
-            await safe_edit_message(message, format_gif_status_message(display_prompt, f"GIF 转换失败：{exc}", self.config), parse_mode="html")
+            detail = "ffmpeg 转换失败，请检查媒体格式或时长" if isinstance(exc, subprocess.CalledProcessError) else type(exc).__name__
+            await safe_edit_message(message, format_gif_status_message(display_prompt, f"GIF 转换失败：{detail}", self.config), parse_mode="html")
         finally:
             _unlink_quietly(downloaded_path)
 
@@ -150,8 +151,12 @@ def extract_command_prompt(text: str, prefixes: list[str]) -> str | None:
             return ""
         if lowered.startswith(prefix.lower()):
             rest = stripped[len(prefix) :]
-            if not rest or rest[0].isspace() or prefix.startswith("/"):
+            if not rest or rest[0].isspace():
                 return rest.strip()
+            if prefix.startswith("/") and rest.startswith("@"):
+                mention_match = re.match(r"^@[A-Za-z0-9_]+(?:\s+(.*))?$", rest, flags=re.DOTALL)
+                if mention_match:
+                    return (mention_match.group(1) or "").strip()
     return None
 
 

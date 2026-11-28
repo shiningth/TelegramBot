@@ -12,8 +12,8 @@
     <link rel="icon" href="/assets/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="stylesheet" href="/styles.css?v=20261125a" />
-    <link rel="stylesheet" href="/theme.css?v=20261125a" />
+    <link rel="stylesheet" href="/styles.css?v=20261128a" />
+    <link rel="stylesheet" href="/theme.css?v=20261128a" />
   </head>
   <body>
     <aside class="sidebar">
@@ -26,24 +26,24 @@
       </div>
       <nav class="side-nav">
         <button class="nav-item active" data-view="dashboard"><span class="nav-ico" data-icon="dashboard"></span><span>仪表盘</span></button>
-        <div class="nav-group expanded" data-group="modules">
+        <div class="nav-group" data-group="modules">
           <button class="nav-item nav-parent" data-view="modules">
-            <span class="nav-ico" data-icon="modules"></span><span>功能模块</span><span class="chevron" data-icon="chevronUp" title="展开/收起"></span>
+            <span class="nav-ico" data-icon="modules"></span><span>功能模块</span><span class="chevron" data-icon="chevronDown" title="展开/收起" hidden></span>
           </button>
-          <div class="sub-nav">
-            <button class="sub-nav-item" data-view="moduleRedPacket"><span class="nav-ico" data-icon="red_packet"></span><span>自动抢红包</span></button>
-            <button class="sub-nav-item" data-view="moduleSendRedPacket"><span class="nav-ico" data-icon="send_red_packet"></span><span>发红包</span></button>
-            <button class="sub-nav-item" data-view="moduleAiReply"><span class="nav-ico" data-icon="ai_reply"></span><span>AI 自动回复</span></button>
-            <button class="sub-nav-item" data-view="moduleUserProfile"><span class="nav-ico" data-icon="user_profile"></span><span>群友画像</span></button>
-            <button class="sub-nav-item" data-view="moduleAiImage"><span class="nav-ico" data-icon="ai_image"></span><span>AI 生图</span></button>
-            <button class="sub-nav-item" data-view="moduleAiDecrypt"><span class="nav-ico" data-icon="ai_decrypt"></span><span>AI 解密</span></button>
-            <button class="sub-nav-item" data-view="moduleGif"><span class="nav-ico" data-icon="gif"></span><span>GIF动图</span></button>
-            <button class="sub-nav-item" data-view="moduleWordCloud"><span class="nav-ico" data-icon="word_cloud"></span><span>词云</span></button>
-            <button class="sub-nav-item" data-view="moduleCheckin"><span class="nav-ico" data-icon="checkin"></span><span>自动签到</span></button>
-            <button class="sub-nav-item" data-view="moduleAutoForward"><span class="nav-ico" data-icon="auto_forward"></span><span>自动转发</span></button>
-            <button class="sub-nav-item" data-view="moduleMagnetImport"><span class="nav-ico" data-icon="magnet_import"></span><span>磁力数据导入(momo专用)</span></button>
-            <button class="sub-nav-item" data-view="moduleQuote"><span class="nav-ico" data-icon="quote"></span><span>语录贴纸</span></button>
-            <button class="sub-nav-item" data-view="moduleChatGames"><span class="nav-ico" data-icon="chat_games"></span><span>聊天小游戏</span></button>
+          <div class="sub-nav" hidden>
+            <button class="sub-nav-item" data-view="moduleRedPacket" hidden><span class="nav-ico" data-icon="red_packet"></span><span>自动抢红包</span></button>
+            <button class="sub-nav-item" data-view="moduleSendRedPacket" hidden><span class="nav-ico" data-icon="send_red_packet"></span><span>发红包</span></button>
+            <button class="sub-nav-item" data-view="moduleAiReply" hidden><span class="nav-ico" data-icon="ai_reply"></span><span>AI 自动回复</span></button>
+            <button class="sub-nav-item" data-view="moduleUserProfile" hidden><span class="nav-ico" data-icon="user_profile"></span><span>群友画像</span></button>
+            <button class="sub-nav-item" data-view="moduleAiImage" hidden><span class="nav-ico" data-icon="ai_image"></span><span>AI 生图</span></button>
+            <button class="sub-nav-item" data-view="moduleAiDecrypt" hidden><span class="nav-ico" data-icon="ai_decrypt"></span><span>AI 解密</span></button>
+            <button class="sub-nav-item" data-view="moduleGif" hidden><span class="nav-ico" data-icon="gif"></span><span>GIF动图</span></button>
+            <button class="sub-nav-item" data-view="moduleWordCloud" hidden><span class="nav-ico" data-icon="word_cloud"></span><span>词云</span></button>
+            <button class="sub-nav-item" data-view="moduleCheckin" hidden><span class="nav-ico" data-icon="checkin"></span><span>自动签到</span></button>
+            <button class="sub-nav-item" data-view="moduleAutoForward" hidden><span class="nav-ico" data-icon="auto_forward"></span><span>自动转发</span></button>
+            <button class="sub-nav-item" data-view="moduleMagnetImport" hidden><span class="nav-ico" data-icon="magnet_import"></span><span>磁力数据导入(momo专用)</span></button>
+            <button class="sub-nav-item" data-view="moduleQuote" hidden><span class="nav-ico" data-icon="quote"></span><span>语录贴纸</span></button>
+            <button class="sub-nav-item" data-view="moduleChatGames" hidden><span class="nav-ico" data-icon="chat_games"></span><span>聊天小游戏</span></button>
           </div>
         </div>
         <div class="nav-group" data-group="ai">
@@ -966,9 +966,13 @@
             </div>
           </div>
           <div class="group-summary">
-            <strong id="groupCount">已选择 0 个群组</strong>
+            <strong id="groupCount">监听已暂停</strong>
             <span id="groupLoadState">尚未加载群组列表</span>
           </div>
+          <label class="inline-check">
+            <input id="monitorAllChats" type="checkbox" aria-describedby="monitorAllChatsHint"> 监听所有会话
+          </label>
+          <p id="monitorAllChatsHint" class="hint">开启后包含群组、频道和私聊。关闭后只监听所选群组，未选群组时暂停监听。</p>
           <div id="selectedGroupNames" class="selected-group-names"></div>
           <div id="groupList" class="group-list">
             <div class="empty-state">加载后可以直接勾选群组；如果 Telegram 未连接，请先确认 session 和 api_id/api_hash 配置。</div>
@@ -985,6 +989,6 @@
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
-    <script src="/app.js?v=20261125a"></script>
+    <script src="/app.js?v=20261128a"></script>
   </body>
 </html>

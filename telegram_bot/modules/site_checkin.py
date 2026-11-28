@@ -19,9 +19,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from telegram_bot.config import SiteCheckinConfig, SiteCheckinSiteConfig
+from telegram_bot.shared import netproxy
 from telegram_bot.shared.sitecheckin import SignResult, as_dict, sign_site
 
 from .base import ModuleCard
@@ -87,6 +86,8 @@ def is_due(
     """
     fixed = _daily_cron_time(site.cron)
     if fixed is None:
+        if last_run is not None and last_run.strftime("%Y-%m-%d %H:%M") == now.strftime("%Y-%m-%d %H:%M"):
+            return False
         return cron_matches(site.cron, now)
     due = now.replace(hour=fixed[0], minute=fixed[1], second=0, microsecond=0)
     if now < due:
@@ -151,6 +152,8 @@ class SiteCheckinModule:
             "poll_interval_seconds": self.config.poll_interval_seconds,
             "timeout_seconds": self.config.timeout_seconds,
             "log_keep_days": self.config.log_keep_days,
+            "retry_failed_minutes": self.config.retry_failed_minutes,
+            "max_attempts_per_day": self.config.max_attempts_per_day,
             "flaresolverr": self.config.flaresolverr,
             "notify_enabled": self.config.notify_enabled,
             "notify_bot_token": self.config.notify_bot_token,
@@ -177,19 +180,25 @@ class SiteCheckinModule:
             ],
         }
         merged.update(values)
+        if not str(merged.get("notify_bot_token") or "").strip():
+            merged["notify_bot_token"] = self.config.notify_bot_token
         # 面板不回显已保存的 Cookie：前端留空即代表「沿用原值」，这里把旧值补回去
-        old_cookies = {site.id: site.cookie for site in self.config.sites}
+        old_sites = {site.id: site for site in self.config.sites}
         incoming = merged.get("sites")
         if isinstance(incoming, list):
             for item in incoming:
                 if not isinstance(item, dict):
                     continue
                 site_id = str(item.get("id") or "").strip()
-                if not str(item.get("cookie") or "").strip() and site_id in old_cookies:
-                    item["cookie"] = old_cookies[site_id]
+                old_site = old_sites.get(site_id)
+                if old_site is not None:
+                    if not str(item.get("cookie") or "").strip():
+                        item["cookie"] = old_site.cookie
+                    item.setdefault("headers", old_site.headers)
+                    item.setdefault("post_data", old_site.post_data)
         self.config = site_checkin_config_from_dict(merged)
-        self._sync_card()
         self._load_state()
+        self._sync_card()
 
     def _sync_card(self) -> None:
         self.card.config = {
@@ -199,7 +208,6 @@ class SiteCheckinModule:
             "log_keep_days": self.config.log_keep_days,
             "flaresolverr": self.config.flaresolverr,
             "notify_enabled": self.config.notify_enabled,
-            "notify_bot_token": self.config.notify_bot_token,
             "has_notify_bot_token": bool(self.config.notify_bot_token),
             "notify_chat_id": self.config.notify_chat_id,
             "notify_text": self.config.notify_text,
@@ -236,21 +244,22 @@ class SiteCheckinModule:
         return base / path
 
     def _load_state(self) -> None:
-        path = self._resolve(self.config.state_store)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                self._state = {
-                    "version": _STATE_VERSION,
-                    "logs": data.get("logs") if isinstance(data.get("logs"), list) else [],
-                    "last": data.get("last") if isinstance(data.get("last"), dict) else {},
-                }
-        except FileNotFoundError:
-            self._state = {"version": _STATE_VERSION, "logs": [], "last": {}}
-        except Exception:  # noqa: BLE001
-            logger.warning("站点签到状态文件读取失败，使用空状态", exc_info=True)
-            self._state = {"version": _STATE_VERSION, "logs": [], "last": {}}
-        self._prune_logs()
+        with self._lock:
+            path = self._resolve(self.config.state_store)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._state = {
+                        "version": _STATE_VERSION,
+                        "logs": data.get("logs") if isinstance(data.get("logs"), list) else [],
+                        "last": data.get("last") if isinstance(data.get("last"), dict) else {},
+                    }
+            except FileNotFoundError:
+                self._state = {"version": _STATE_VERSION, "logs": [], "last": {}}
+            except Exception:  # noqa: BLE001
+                logger.warning("站点签到状态文件读取失败，使用空状态", exc_info=True)
+                self._state = {"version": _STATE_VERSION, "logs": [], "last": {}}
+            self._prune_logs()
 
     def _prune_logs(self) -> None:
         keep_days = max(1, int(self.config.log_keep_days or 30))
@@ -321,39 +330,40 @@ class SiteCheckinModule:
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
         detail = result.detail or ""
-        streak = 0
-        if result.state in ("signed", "already"):
-            today_done_before = any(
-                item.get("site") == site.id
-                and item.get("state") in ("signed", "already")
-                and str(item.get("at") or "")[:10] == today
-                for item in (self._state.get("logs") or [])
-            )
-            if result.state == "already" and not today_done_before and detail.startswith("今日已签到"):
-                # 今天第一条就是已签：多半是我们这一轮刚签上的，按签到成功展示
-                detail = "签到成功" + detail[len("今日已签到"):]
-            streak = self._streak(site.id, today)
-            if streak >= 2 and "连续" not in detail:
-                if detail.endswith("）"):
-                    detail = detail[:-1] + f" · 连续 {streak} 天）"
-                else:
-                    detail = detail.rstrip("。，") + f"（连续 {streak} 天）"
-        entry = {
-            "at": now.strftime("%Y-%m-%dT%H:%M:%S"),
-            "time": now.strftime("%m-%d %H:%M"),
-            "site": site.id,
-            "name": site.name or site.id,
-            "state": result.state,
-            "detail": detail[:80],  # 日志只留一句，完整页面另存 debug_html
-            "http": result.http,
-            "ms": result.elapsed_ms,
-            "count": _sign_count(result.detail),
-            "bonus": result.bonus,
-            "streak": streak,
-        }
-        self._state.setdefault("logs", []).insert(0, entry)
-        self._state["logs"] = self._state["logs"][:_LOG_LIMIT]
-        self._state.setdefault("last", {})[site.id] = entry
+        with self._lock:
+            streak = 0
+            if result.state in ("signed", "already"):
+                today_done_before = any(
+                    item.get("site") == site.id
+                    and item.get("state") in ("signed", "already")
+                    and str(item.get("at") or "")[:10] == today
+                    for item in (self._state.get("logs") or [])
+                )
+                if result.state == "already" and not today_done_before and detail.startswith("今日已签到"):
+                    # 今天第一条就是已签：多半是我们这一轮刚签上的，按签到成功展示
+                    detail = "签到成功" + detail[len("今日已签到"):]
+                streak = self._streak(site.id, today)
+                if streak >= 2 and "连续" not in detail:
+                    if detail.endswith("）"):
+                        detail = detail[:-1] + f" · 连续 {streak} 天）"
+                    else:
+                        detail = detail.rstrip("。，") + f"（连续 {streak} 天）"
+            entry = {
+                "at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+                "time": now.strftime("%m-%d %H:%M"),
+                "site": site.id,
+                "name": site.name or site.id,
+                "state": result.state,
+                "detail": detail[:80],  # 日志只留一句，完整页面另存 debug_html
+                "http": result.http,
+                "ms": result.elapsed_ms,
+                "count": _sign_count(result.detail),
+                "bonus": result.bonus,
+                "streak": streak,
+            }
+            self._state.setdefault("logs", []).insert(0, entry)
+            self._state["logs"] = self._state["logs"][:_LOG_LIMIT]
+            self._state.setdefault("last", {})[site.id] = entry
         self._save_state()
         # 同步写一条到全局日志（面板「日志」标签里能看到几点签的、结果、失败原因）
         logger.info(
@@ -385,7 +395,9 @@ class SiteCheckinModule:
         """今天这个站点已经跑过几次（看日志时间戳）。"""
         day = now.date().isoformat()
         count = 0
-        for entry in self._state.get("logs") or []:
+        with self._lock:
+            logs = list(self._state.get("logs") or [])
+        for entry in logs:
             if entry.get("site") != site_id:
                 continue
             if str(entry.get("at") or "")[:10] == day:
@@ -396,32 +408,38 @@ class SiteCheckinModule:
         if not self.config.enabled:
             return
         now = datetime.now()
-        for site in self.config.sites:
+        for site in list(self.config.sites):
             if not site.enabled or not site.url:
                 continue
-            last_entry = (self._state.get("last") or {}).get(site.id) or {}
-            last_run: datetime | None = None
-            if last_entry.get("at"):
-                try:
-                    last_run = datetime.fromisoformat(str(last_entry["at"]))
-                except Exception:  # noqa: BLE001
-                    last_run = None
-            if not is_due(
-                site,
-                now,
-                last_run,
-                last_state=str(last_entry.get("state") or ""),
-                attempts_today=self._attempts_today(site.id, now),
-                retry_minutes=int(getattr(self.config, "retry_failed_minutes", 0) or 0),
-                max_attempts=int(getattr(self.config, "max_attempts_per_day", 3) or 3),
-            ):
-                continue
-            result = await self._run(site)
-            result = self._refine_already(site, result)
-            entry = self._record(site, result)
-            result.detail = entry.get("detail") or result.detail
-            await self._notify(site, result)
-            self._sync_card()
+            try:
+                with self._lock:
+                    last_entry = dict((self._state.get("last") or {}).get(site.id) or {})
+                last_run: datetime | None = None
+                if last_entry.get("at"):
+                    try:
+                        last_run = datetime.fromisoformat(str(last_entry["at"]))
+                    except Exception:  # noqa: BLE001
+                        last_run = None
+                if not is_due(
+                    site,
+                    now,
+                    last_run,
+                    last_state=str(last_entry.get("state") or ""),
+                    attempts_today=self._attempts_today(site.id, now),
+                    retry_minutes=int(getattr(self.config, "retry_failed_minutes", 0) or 0),
+                    max_attempts=int(getattr(self.config, "max_attempts_per_day", 3) or 3),
+                ):
+                    continue
+                result = await self._run(site)
+                result = self._refine_already(site, result)
+                entry = self._record(site, result)
+                result.detail = entry.get("detail") or result.detail
+                await self._notify(site, result)
+                self._sync_card()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("站点签到执行异常 (%s): %s", site.name or site.id, exc)
 
     async def run_now(self, site_id: str) -> dict[str, Any]:
         """面板上的「立即签到」按钮。"""
@@ -469,7 +487,7 @@ class SiteCheckinModule:
 
     def _quiz_table_path(self) -> Path:
         """答题式签到的题库（封面 md5 → 正确片名），与状态文件同目录。"""
-        return Path(self.config.state_store).parent / "site_checkin_quiz.json"
+        return self._resolve(self.config.state_store).parent / "site_checkin_quiz.json"
 
     def _save_debug(self, site: SiteCheckinSiteConfig, result: SignResult) -> None:
         """把页面原文留在 runtime/debug/ 下：签到页改版或出现答题式验证时，能直接看 HTML。"""
@@ -477,9 +495,10 @@ class SiteCheckinModule:
         if not html:
             return
         try:
-            target = Path(self.config.state_store).parent.parent / "debug"
+            target = self._resolve(self.config.state_store).parent.parent / "debug"
             target.mkdir(parents=True, exist_ok=True)
-            (target / f"site_checkin_{site.id}.html").write_text(html[:800_000], encoding="utf-8")
+            safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(site.id or "site")).strip("_") or "site"
+            (target / f"site_checkin_{safe_id}.html").write_text(html[:800_000], encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
             logger.debug("站点签到 debug 页面落盘失败：%s", exc)
 
@@ -510,13 +529,14 @@ class SiteCheckinModule:
             return
         try:
             await asyncio.to_thread(self._send_bot_api, token, chat, text)
-        except Exception:  # noqa: BLE001
-            logger.warning("站点签到通知发送失败", exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            safe_err = re.sub(r"bot\d+:[^/\s]+", "bot***", f"{type(exc).__name__}: {exc}")
+            logger.warning("站点签到通知发送失败：%s", safe_err[:200])
 
     @staticmethod
     def _send_bot_api(token: str, chat_id: str, text: str) -> None:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        with httpx.Client(timeout=20) as client:
+        with netproxy.client_telegram(timeout=20) as client:
             client.post(url, data={"chat_id": chat_id, "text": text})
 
     # ------------------------------------------------------------------ 面板

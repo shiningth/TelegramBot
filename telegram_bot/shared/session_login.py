@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import threading
 import time
 import uuid
 
@@ -76,6 +78,8 @@ class SessionLoginManager:
         self.sessions_dir = Path(sessions_dir)
         self.ticket_ttl = ticket_ttl
         self._tickets: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------------ 视图
     def sessions(self) -> list[dict[str, Any]]:
@@ -101,17 +105,18 @@ class SessionLoginManager:
 
     def state(self) -> dict[str, Any]:
         self._prune()
-        pending = [
-            {
-                "ticket": ticket["ticket"],
-                "phone": mask_phone(ticket["phone"]),
-                "session_name": ticket["session_name"],
-                "stage": ticket["stage"],
-                "stage_label": _STAGE_LABELS.get(ticket["stage"], ticket["stage"]),
-                "detail": ticket["detail"],
-            }
-            for ticket in self._tickets.values()
-        ]
+        with self._lock:
+            pending = [
+                {
+                    "ticket": ticket["ticket"],
+                    "phone": mask_phone(ticket["phone"]),
+                    "session_name": ticket["session_name"],
+                    "stage": ticket["stage"],
+                    "stage_label": _STAGE_LABELS.get(ticket["stage"], ticket["stage"]),
+                    "detail": ticket["detail"],
+                }
+                for ticket in self._tickets.values()
+            ]
         return {
             "ok": True,
             "sessions": self.sessions(),
@@ -123,6 +128,8 @@ class SessionLoginManager:
     async def send_code(self, *, phone: str, session_name: str, api_id: int, api_hash: str) -> dict[str, Any]:
         from telethon import TelegramClient
 
+        self._loop = asyncio.get_running_loop()
+        self._prune()
         if not api_id or not api_hash:
             raise ValueError("请先在上面填好 api_id 与 api_hash（并保存），再来登录用户会话")
         number = normalize_phone(phone)
@@ -140,24 +147,27 @@ class SessionLoginManager:
             await _safe_disconnect(client)
             _unlink(tmp_path)
             raise
-        self._tickets[ticket] = {
-            "ticket": ticket,
-            "phone": number,
-            "session_name": name,
-            "stage": "code_sent",
-            "detail": _delivery_hint(type(sent.type).__name__),
-            "phone_code_hash": sent.phone_code_hash,
-            "client": client,
-            "tmp_path": tmp_path,
-            "final_path": final_path,
-            "created_at": time.time(),
-        }
+        detail = _delivery_hint(type(sent.type).__name__)
+        with self._lock:
+            self._tickets[ticket] = {
+                "ticket": ticket,
+                "phone": number,
+                "session_name": name,
+                "stage": "code_sent",
+                "detail": detail,
+                "phone_code_hash": sent.phone_code_hash,
+                "client": client,
+                "tmp_path": tmp_path,
+                "final_path": final_path,
+                "created_at": time.time(),
+            }
         logger.info("用户会话登录：已向 %s 发送验证码（session=%s ticket=%s）", mask_phone(number), name, ticket)
-        return {"ok": True, "ticket": ticket, "stage": "code_sent", "detail": self._tickets[ticket]["detail"]}
+        return {"ok": True, "ticket": ticket, "stage": "code_sent", "detail": detail}
 
     async def sign_in(self, *, ticket: str, code: str) -> dict[str, Any]:
         from telethon.errors import SessionPasswordNeededError
 
+        self._loop = asyncio.get_running_loop()
         entry = self._require(ticket)
         value = str(code or "").strip().replace(" ", "")
         if not value:
@@ -166,13 +176,15 @@ class SessionLoginManager:
         try:
             await client.sign_in(phone=entry["phone"], code=value, phone_code_hash=entry["phone_code_hash"])
         except SessionPasswordNeededError:
-            entry["stage"] = "password_needed"
-            entry["detail"] = "这个账号开了两步验证，请输入两步验证密码。"
+            with self._lock:
+                entry["stage"] = "password_needed"
+                entry["detail"] = "这个账号开了两步验证，请输入两步验证密码。"
             return {"ok": False, "ticket": ticket, "stage": "password_needed", "detail": entry["detail"]}
         me = await self._finish(entry)
         return {"ok": True, "ticket": ticket, "stage": "done", "detail": f"已登录：{me}"}
 
     async def check_password(self, *, ticket: str, password: str) -> dict[str, Any]:
+        self._loop = asyncio.get_running_loop()
         entry = self._require(ticket)
         value = str(password or "")
         if not value:
@@ -182,52 +194,69 @@ class SessionLoginManager:
         return {"ok": True, "ticket": ticket, "stage": "done", "detail": f"已登录：{me}"}
 
     async def cancel(self, *, ticket: str) -> dict[str, Any]:
-        entry = self._tickets.pop(str(ticket or "").strip(), None)
+        with self._lock:
+            entry = self._tickets.pop(str(ticket or "").strip(), None)
         if entry is None:
             return {"ok": True, "detail": "没有这条登录请求"}
         await _safe_disconnect(entry["client"])
         _unlink(entry.get("tmp_path"))
         return {"ok": True, "detail": "已取消"}
 
+    async def close(self) -> None:
+        with self._lock:
+            entries = list(self._tickets.values())
+            self._tickets.clear()
+        for entry in entries:
+            await _safe_disconnect(entry["client"])
+            _unlink(entry.get("tmp_path"))
+
     # ------------------------------------------------------------------ 内部
     async def _finish(self, entry: dict[str, Any]) -> str:
         client = entry["client"]
         try:
-            me = await client.get_me()
-            label = f"@{me.username}" if getattr(me, "username", None) else f"{getattr(me, 'first_name', '') or '账号'} ({me.id})"
-            if getattr(me, "username", None):
-                label += f" ({me.id})"
-        except Exception:  # noqa: BLE001 - 拿不到资料不影响文件已保存
-            label = "账号"
-        try:
-            client.session.save()
-        except Exception:  # noqa: BLE001
-            logger.debug("保存临时会话失败", exc_info=True)
-        await _safe_disconnect(client)
-        tmp_path = entry.get("tmp_path")
-        final_path = entry.get("final_path")
-        if tmp_path is not None and final_path is not None:
             try:
-                tmp_path.replace(final_path)
-            except OSError:
-                logger.exception("会话文件改名失败: %s -> %s", tmp_path, final_path)
-                raise
-        self._tickets.pop(entry["ticket"], None)
-        logger.info("用户会话登录完成：session=%s %s", entry["session_name"], label)
-        return label
+                me = await client.get_me()
+                label = f"@{me.username}" if getattr(me, "username", None) else f"{getattr(me, 'first_name', '') or '账号'} ({me.id})"
+                if getattr(me, "username", None):
+                    label += f" ({me.id})"
+            except Exception:  # noqa: BLE001 - 拿不到资料不影响文件已保存
+                label = "账号"
+            try:
+                client.session.save()
+            except Exception:  # noqa: BLE001
+                logger.debug("保存临时会话失败", exc_info=True)
+            await _safe_disconnect(client)
+            tmp_path = entry.get("tmp_path")
+            final_path = entry.get("final_path")
+            if tmp_path is not None and final_path is not None:
+                try:
+                    tmp_path.replace(final_path)
+                except OSError:
+                    logger.exception("会话文件改名失败: %s -> %s", tmp_path, final_path)
+                    raise
+            logger.info("用户会话登录完成：session=%s %s", entry["session_name"], label)
+            return label
+        finally:
+            with self._lock:
+                self._tickets.pop(entry["ticket"], None)
 
     def _require(self, ticket: str) -> dict[str, Any]:
-        entry = self._tickets.get(str(ticket or "").strip())
+        self._prune()
+        with self._lock:
+            entry = self._tickets.get(str(ticket or "").strip())
         if entry is None:
             raise ValueError("登录请求已过期，请重新发送验证码")
         return entry
 
     def _prune(self) -> None:
         now = time.time()
-        for ticket in [key for key, item in self._tickets.items() if now - item["created_at"] > self.ticket_ttl]:
-            entry = self._tickets.pop(ticket)
-            logger.info("用户会话登录超时，丢弃 ticket=%s", ticket)
-            _close_later(entry["client"])
+        expired: list[dict[str, Any]] = []
+        with self._lock:
+            for ticket in [key for key, item in self._tickets.items() if now - item["created_at"] > self.ticket_ttl]:
+                expired.append(self._tickets.pop(ticket))
+        for entry in expired:
+            logger.info("用户会话登录超时，丢弃 ticket=%s", entry["ticket"])
+            _close_later(entry["client"], entry.get("tmp_path"), self._loop)
 
 
 async def _safe_disconnect(client: Any) -> None:
@@ -237,22 +266,38 @@ async def _safe_disconnect(client: Any) -> None:
         logger.debug("断开临时登录客户端失败", exc_info=True)
 
 
+async def _close_and_cleanup(client: Any, tmp_path: Path | None) -> None:
+    await _safe_disconnect(client)
+    _unlink(tmp_path)
+
+
 def _unlink(path: Path | None) -> None:
     """删掉不受大小限制的会话文件（登录中的临时文件、失败的残留）。"""
     if path is None:
         return
-    try:
-        if path.exists():
-            path.unlink()
-    except OSError:
-        logger.debug("删除会话文件失败: %s", path, exc_info=True)
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        target = path if not suffix else path.with_name(path.name + suffix)
+        try:
+            if target.exists():
+                target.unlink()
+        except OSError:
+            logger.debug("删除会话文件失败: %s", target, exc_info=True)
 
 
-def _close_later(client: Any) -> None:
-    import asyncio
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
+def _close_later(client: Any, tmp_path: Path | None = None, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    if loop is not None and not loop.is_closed() and loop.is_running():
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            loop.create_task(_close_and_cleanup(client, tmp_path))
+        else:
+            asyncio.run_coroutine_threadsafe(_close_and_cleanup(client, tmp_path), loop)
         return
-    loop.create_task(_safe_disconnect(client))
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        _unlink(tmp_path)
+        return
+    running.create_task(_close_and_cleanup(client, tmp_path))

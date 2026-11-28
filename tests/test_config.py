@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from telegram_bot.config import AppConfig
+import pytest
+
+from telegram_bot.config import AppConfig, SiteCheckinSiteConfig
+from telegram_bot.modules.base import ModuleCard
 
 
 def test_config_file_roundtrip(tmp_path: Path) -> None:
@@ -34,6 +37,53 @@ def test_ai_provider_type_roundtrip(tmp_path: Path) -> None:
 
     assert loaded.ai.reply_provider.provider_type == "claude"
     assert loaded.ai.image_provider.provider_type == "openai-compatible"
+
+
+def test_interrupted_config_replace_keeps_previous_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "config.json"
+    config = AppConfig()
+    config.save(path)
+    original = path.read_bytes()
+    config.project_name = "updated"
+
+    def fail_replace(source, destination):
+        assert source.parent == destination.parent
+        raise OSError("simulated replace failure")
+
+    with monkeypatch.context() as context:
+        context.setattr("telegram_bot.config.os.replace", fail_replace)
+        with pytest.raises(OSError):
+            config.save(path)
+    assert path.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_setting_and_module_snapshots_only_report_secret_presence() -> None:
+    config = AppConfig()
+    config.network.proxy_url = "http://proxy-user:proxy-secret@localhost:8080"
+    config.checkin.notify_bot_token = "check-in-secret"
+    config.ltx_watch.notify_bot_token = "collector-secret"
+    config.site_checkin.notify_bot_token = "site-notify-secret"
+    site = SiteCheckinSiteConfig(id="test", cookie="site-cookie", headers="Authorization: Key")
+    config.site_checkin.sites = [site]
+
+    snapshot = config.public_dict()
+    assert snapshot["network"]["proxy_url"] == "" and snapshot["network"]["has_proxy"]
+    assert snapshot["checkin"]["has_notify_bot_token"]
+    assert snapshot["ltx_watch"]["has_notify_bot_token"]
+    assert snapshot["site_checkin"]["has_notify_bot_token"]
+    assert snapshot["site_checkin"]["sites"][0]["has_cookie"]
+    assert snapshot["site_checkin"]["sites"][0]["has_headers"]
+    card = ModuleCard("test", "test", "", "test", config={
+        "notify_bot_token": config.site_checkin.notify_bot_token,
+        "sites": [{"cookie": site.cookie}],
+    })
+    public_card = card.public_dict()
+    assert public_card["config"]["notify_bot_token"] == ""
+    assert public_card["config"]["sites"][0] == {"cookie": "", "has_cookie": True}
+    assert card.config["notify_bot_token"] == config.site_checkin.notify_bot_token
+    for secret in ("proxy-user", "proxy-secret", "check-in-secret", "collector-secret", "site-notify-secret", "site-cookie", site.headers):
+        assert secret not in str(snapshot) and secret not in str(public_card)
 
 
 def test_send_red_packet_minimums_roundtrip(tmp_path: Path) -> None:
@@ -144,3 +194,22 @@ def test_user_profile_defaults_include_fx_all_aliases() -> None:
     assert ".fx" in config.user_profile.command_prefixes
     assert "毒舌" in config.user_profile.style_prompt
     assert "适度夸张" in config.user_profile.style_prompt
+
+
+def test_env_overrides_keep_secret_strings_as_strings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "config.json"
+    AppConfig().save(path)
+    monkeypatch.setenv("TGBOT_ADMIN_USERNAME", "00123")
+    monkeypatch.setenv("TGBOT_ADMIN_PASSWORD", "true")
+    monkeypatch.setenv("TGBOT_TELEGRAM_BOT_TOKEN", "123456:true")
+    monkeypatch.setenv("TGBOT_ADMIN_PORT", "9090")
+    monkeypatch.setenv("TGBOT_TELEGRAM_ENABLED", "yes")
+
+    loaded = AppConfig.load(path)
+    assert loaded.admin.username == "00123"
+    assert isinstance(loaded.admin.username, str)
+    assert loaded.admin.password == "true"
+    assert isinstance(loaded.admin.password, str)
+    assert loaded.telegram.bot_token == "123456:true"
+    assert loaded.admin.port == 9090
+    assert loaded.telegram.enabled is True

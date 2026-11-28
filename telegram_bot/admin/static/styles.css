@@ -269,6 +269,12 @@ button.saving {
   text-align: left;
 }
 
+.sub-nav[hidden],
+.sub-nav-item[hidden],
+.chevron[hidden] {
+  display: none !important;
+}
+
 .sub-nav-item::before {
   content: "";
   position: absolute;

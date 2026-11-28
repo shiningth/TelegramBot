@@ -159,3 +159,42 @@ def test_red_packet_admin_pre_click_controls_preserve_message_lines() -> None:
     for field in ("send_message_before_click", "delay_before_click"):
         assert f'data-field="{field}"' in app_js
         assert f'{field}: card.querySelector(\'[data-field="{field}"]\').checked' in app_js
+
+
+def test_admin_module_sidebar_only_shows_enabled_modules() -> None:
+    admin_static = ROOT / "telegram_bot" / "admin" / "static"
+    index_html = (admin_static / "index.html").read_text(encoding="utf-8")
+    styles_css = (admin_static / "styles.css").read_text(encoding="utf-8")
+    app_js = (admin_static / "app.js").read_text(encoding="utf-8")
+
+    group_match = re.search(
+        r'<div class="nav-group" data-group="modules">(?P<body>.*?)</div>\s*</div>\s*<div class="nav-group" data-group="ai">',
+        index_html,
+        re.S,
+    )
+    assert group_match is not None, "modules nav-group not found in index.html"
+    group_html = group_match.group("body")
+
+    assert re.search(r'<span class="chevron"[^>]*\bhidden\b', group_html)
+    assert '<div class="sub-nav" hidden>' in group_html
+    sub_nav_buttons = re.findall(r'<button class="sub-nav-item"[^>]*>', group_html)
+    assert len(sub_nav_buttons) == len(set(_module_view_map(app_js).values()))
+    for button_tag in sub_nav_buttons:
+        assert "hidden" in button_tag
+
+    assert re.search(
+        r"\.sub-nav\[hidden\],\s*\.sub-nav-item\[hidden\],\s*\.chevron\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}",
+        styles_css,
+    )
+
+    assert "function syncModuleSidebar()" in app_js
+    assert "syncModuleSidebar();" in app_js
+    sync_start = app_js.index("function syncModuleSidebar()")
+    sync_end = app_js.index("function findModule(", sync_start)
+    sync_source = app_js[sync_start:sync_end]
+    assert "moduleViewMap[module.id]" in sync_source
+    assert "module.enabled" in sync_source
+    assert "item.hidden = !visible" in sync_source
+    assert "subNav.hidden = visibleCount === 0" in sync_source
+    assert "chevron.hidden = visibleCount === 0" in sync_source
+    assert "setGroupExpanded(group, hasVisibleSubNav)" in app_js

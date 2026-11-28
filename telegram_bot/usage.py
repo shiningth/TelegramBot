@@ -84,11 +84,15 @@ def build_ai_usage_stats(path: Path, range_key: str = "today") -> dict[str, Any]
         bucket["requests"] += 1
         bucket["total_tokens"] += total_tokens
 
-    _finish_row(summary, now, start_ts)
+    effective_start = start_ts
+    if effective_start is None and items:
+        effective_start = min(float(item["ts"]) for item in items)
+
+    _finish_row(summary, now, effective_start)
     for row in models.values():
-        _finish_row(row, now, start_ts)
+        _finish_row(row, now, effective_start)
     for row in features.values():
-        _finish_row(row, now, start_ts)
+        _finish_row(row, now, effective_start)
 
     return {
         "range": normalized,
@@ -144,7 +148,8 @@ def _finish_row(row: dict[str, Any], now: float, start_ts: float | None) -> None
     if requests:
         row["avg_latency_ms"] = round(row["total_latency_ms"] / requests)
         row["success_rate"] = round((row["success"] / requests) * 100, 1)
-    minutes = max(((now - (start_ts or now)) / 60), 1)
+    span = (now - start_ts) if start_ts is not None else 0.0
+    minutes = max(span / 60, 1.0)
     row["rpm"] = round(row["requests"] / minutes, 2)
     row["tpm"] = round(row["total_tokens"] / minutes, 2)
 

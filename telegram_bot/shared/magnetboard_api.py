@@ -203,7 +203,7 @@ class ExistingLookup:
         self._client: Any = None
         self._headers: dict[str, str] = {}
         self._lock = threading.Lock()
-        self._index: dict[str, set[str]] | None = None
+        self._indexes: dict[str, dict[str, set[str]]] = {}
 
     def __enter__(self) -> "ExistingLookup":
         self.open()
@@ -239,7 +239,7 @@ class ExistingLookup:
         if client is not None:
             client.close()
 
-    def prime(self, source_site: str = "", *, page_size: int = 100) -> int:
+    def prime(self, source_site: str = "", *, page_size: int = 100, max_pages: int = 500) -> int:
         """把某个来源的全部记录一次性拉下来建索引（番号 → 指纹集合）。
 
         momo 单条查询约 0.9 秒且并发收益有限（实测 8 线程只到 2 行/秒），几千行的表逐条查
@@ -250,7 +250,7 @@ class ExistingLookup:
         index: dict[str, set[str]] = {}
         page = 1
         total = 0
-        while True:
+        while page <= max_pages:
             response = self._client.get(
                 f"{self._base}/api/magnets",
                 headers=self._headers,
@@ -271,7 +271,6 @@ class ExistingLookup:
                 if not code:
                     continue
                 bucket = index.setdefault(code, set())
-                bucket.add(code.replace("-", ""))
                 raw_hash = str(item.get("magnet_hash") or "").strip().lower()
                 if raw_hash:
                     bucket.add(raw_hash)
@@ -285,10 +284,14 @@ class ExistingLookup:
                     bucket.add(magnet_fingerprint(str(magnet)))
                 total += 1
             pages = block.get("total_pages") if isinstance(block, dict) else None
-            if not rows or (isinstance(pages, int) and page >= pages):
+            try:
+                total_pages = int(pages) if pages is not None else None
+            except (TypeError, ValueError):
+                total_pages = None
+            if not rows or (total_pages is not None and page >= total_pages):
                 break
             page += 1
-        self._index = index
+        self._indexes[site] = index
         logger.info("momo precheck index primed: site=%s rows=%d codes=%d", site, total, len(index))
         return total
 
@@ -296,9 +299,11 @@ class ExistingLookup:
         wanted = magnet_fingerprint(ed2k)
         if not code or not wanted:
             return None
-        if self._index is not None:
+        target_site = source_site or self._source_site
+        site_index = self._indexes.get(target_site)
+        if site_index is not None:
             # 索引已经整表拉过：本地比对，不再打接口
-            bucket = self._index.get(code.strip().upper())
+            bucket = site_index.get(code.strip().upper())
             return {"code": code} if bucket and wanted in bucket else None
         self.open()
         response = self._client.get(
@@ -311,7 +316,7 @@ class ExistingLookup:
             raise MagnetBoardError(f"momo 查询失败（{response.status_code}）：{_error_text(payload, response)}")
         block = payload.get("data")
         rows = block.get("data") if isinstance(block, dict) else block
-        return _find_in_rows(rows, source_site=source_site or self._source_site, wanted=wanted)
+        return _find_in_rows(rows, source_site=target_site, wanted=wanted)
 
     def __call__(self, code: str, ed2k: str, source_site: str = "") -> bool:
         return self.find(code, ed2k, source_site) is not None

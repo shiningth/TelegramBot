@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import html
 import logging
 import re
 import shutil
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -95,12 +97,16 @@ async def collect_image_inputs_for_responses(
         try:
             media = await target.download_media(file=bytes)
         except Exception as exc:
-            return image_inputs, f"DOWNLOAD_FAILED:{exc}"
+            media_errors.append(f"{label}:DOWNLOAD_FAILED:{exc}")
+            logger.warning("Failed to download AI media input label=%s: %s", label, exc)
+            continue
         if not media:
             continue
         if len(media) > MAX_MEDIA_BYTES:
-            return image_inputs, "TOO_LARGE"
-        image_url, error = media_bytes_to_responses_image_url(media, target)
+            media_errors.append(f"{label}:TOO_LARGE")
+            logger.info("Skipped oversized AI media input label=%s bytes=%s", label, len(media))
+            continue
+        image_url, error = await asyncio.to_thread(media_bytes_to_responses_image_url, media, target)
         if error:
             media_errors.append(f"{label}:{error}")
             logger.info("Skipped unsupported AI media input label=%s error=%s", label, error)
@@ -122,7 +128,7 @@ async def collect_motion_media_frame_inputs(target: Any, label: str, max_frames:
             if not downloaded:
                 return [], "DOWNLOAD_EMPTY"
             downloaded_path = Path(downloaded)
-            frames = extract_motion_media_frames_as_jpegs(downloaded_path, max_frames)
+            frames = await asyncio.to_thread(extract_motion_media_frames_as_jpegs, downloaded_path, max_frames)
             if not frames:
                 return [], "NO_FRAMES"
             return [
@@ -159,7 +165,10 @@ async def collect_related_media_messages(event: Any, trigger_message: Any, repli
 
     try:
         await collect_with(max_id=reply_id + 80)
-        await collect_with(min_id=max(reply_id - 80, 0))
+        try:
+            await collect_with(min_id=max(reply_id - 80, 0), reverse=True)
+        except TypeError:
+            await collect_with(min_id=max(reply_id - 80, 0))
     except TypeError:
         try:
             await collect_with(max_id=reply_id + 80)
@@ -306,6 +315,12 @@ def build_sources_html(sources: list[tuple[str, str]]) -> str:
     for title, url in sources:
         if not url or url in seen:
             continue
+        try:
+            scheme = urllib.parse.urlsplit(url).scheme.lower()
+        except ValueError:
+            continue
+        if scheme not in {"http", "https"}:
+            continue
         seen.add(url)
         lines.append(f"• <a href='{html.escape(url, quote=True)}'>{html.escape(title or url)}</a>")
         if len(lines) >= MAX_SOURCE_LINKS:
@@ -333,11 +348,14 @@ def extract_usage_counts(source: Any) -> dict[str, int]:
     total_tokens = _as_nonnegative_int(obj_get(usage, "total_tokens", 0)) or input_tokens + output_tokens
     input_details = obj_get(usage, "input_tokens_details", obj_get(usage, "prompt_tokens_details", {})) or {}
     output_details = obj_get(usage, "output_tokens_details", obj_get(usage, "completion_tokens_details", {})) or {}
+    cached_tokens = _as_nonnegative_int(obj_get(input_details, "cached_tokens", 0))
+    if not cached_tokens:
+        cached_tokens = _as_nonnegative_int(obj_get(usage, "cache_read_input_tokens", 0))
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
-        "cached_tokens": _as_nonnegative_int(obj_get(input_details, "cached_tokens", 0)),
+        "cached_tokens": cached_tokens,
         "reasoning_tokens": _as_nonnegative_int(obj_get(output_details, "reasoning_tokens", 0)),
     }
 

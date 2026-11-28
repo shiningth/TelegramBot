@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from telegram_bot.config import public_config_values
 from telegram_bot.shared.contracts import HandlerResult
 
 
@@ -16,6 +17,9 @@ class ModuleCard:
     status: str = "idle"
     config: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
+
+    def public_dict(self) -> dict[str, Any]:
+        return {**vars(self), "config": public_config_values(self.config)}
 
 
 class FeatureModule(Protocol):

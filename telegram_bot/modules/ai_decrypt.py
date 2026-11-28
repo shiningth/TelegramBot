@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from telegram_bot.config import AIConfig, AIDecryptConfig, AIDecryptTemplateConfig
+from telegram_bot.config import AIConfig, AIDecryptConfig, AIDecryptTemplateConfig, write_json_atomic
 from telegram_bot.shared.ai_responses import (
     AsyncOpenAI,
     collect_image_inputs_for_responses,
@@ -112,12 +113,12 @@ class AIDecryptModule:
                 logger.warning("AI decrypt answer looked like a command, skipped: %s", answer[:120])
                 return HandlerResult.ignored(self.card.id)
 
-            self._mark_claimed(template.id, puzzle_id)
             delay_seconds = max(0, int(self.config.send_delay_ms or 0)) / 1000
             if delay_seconds:
                 logger.info("AI decrypt send delayed: template=%s id=%s delay_ms=%s", template.id, puzzle_id, self.config.send_delay_ms)
                 await asyncio.sleep(delay_seconds)
             await respond_to_message(event, answer)
+            self._mark_claimed(template.id, puzzle_id)
             logger.info("AI decrypt answer sent: template=%s id=%s answer=%s", template.id, puzzle_id, answer[:120])
             return HandlerResult.handled(
                 self.card.id,
@@ -175,7 +176,10 @@ class AIDecryptModule:
         if not provider.model:
             raise ValueError("AI 解密需要配置 AI 服务模型")
 
-        client = AsyncOpenAI(api_key=provider.api_key, base_url=provider.base_url.rstrip("/"), timeout=self.config.timeout_seconds)
+        client_kwargs: dict[str, Any] = {"api_key": provider.api_key, "timeout": self.config.timeout_seconds}
+        if (provider.base_url or "").strip():
+            client_kwargs["base_url"] = provider.base_url.rstrip("/")
+        client = AsyncOpenAI(**client_kwargs)
         user_content: list[dict[str, Any]] = [{"type": "input_text", "text": text.strip()}]
         for image_input in image_inputs:
             image_url = image_input.get("url", "")
@@ -328,7 +332,6 @@ class AIDecryptModule:
         return sum(1 for template in self.config.templates if template.enabled)
 
     def _is_claimed(self, template_id: str, puzzle_id: str) -> bool:
-        self.cleanup_claimed_ids()
         entries = self.claimed_ids.get(template_id, {})
         return is_fresh_claim(entries.get(puzzle_id), self.now_func())
 
@@ -371,9 +374,8 @@ class AIDecryptModule:
     def _save_claimed_ids(self) -> None:
         if self.state_path is None:
             return
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": 1, "ttl_seconds": CLAIM_TTL_SECONDS, "templates": self.claimed_ids}
-        self.state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json_atomic(self.state_path, payload)
 
     def _sync_card_config(self) -> None:
         self.card.config = {
@@ -475,12 +477,12 @@ def extract_after_marker(text: str, marker: str) -> str:
     marker = marker.strip()
     if not marker:
         return ""
-    marker_folded = marker.casefold()
+    pattern = re.compile(re.escape(marker), re.IGNORECASE)
     for line in text.splitlines():
-        position = line.casefold().find(marker_folded)
-        if position < 0:
+        match = pattern.search(line)
+        if not match:
             continue
-        return line[position + len(marker) :].strip().lstrip(" \t:：").strip()
+        return line[match.end() :].strip().lstrip(" \t:：").strip()
     return ""
 
 

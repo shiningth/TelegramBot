@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from telegram_bot.config import SendRedPacketConfig, SendRedPacketTemplateConfig
+from telegram_bot.config import SendRedPacketConfig, SendRedPacketTemplateConfig, write_json_atomic
 from telegram_bot.shared.contracts import HandlerResult
 
 from .base import ModuleCard
@@ -82,6 +82,7 @@ class SendRedPacketModule:
         self.state_path = self._resolve_path(self.config.state_store)
         self.active_packets = self._load_state()
         self._claim_lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task[Any]] = set()
         self._sync_card_config()
 
     async def start(self) -> None:
@@ -89,6 +90,12 @@ class SendRedPacketModule:
 
     async def stop(self) -> None:
         self.card.status = "stopped"
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
 
     async def handle_message(self, event: Any) -> HandlerResult:
         message = _event_message(event)
@@ -282,7 +289,9 @@ class SendRedPacketModule:
     def _schedule_transfer_message_delete(self, message: Any, packet_id: str, amount: int) -> None:
         if self.transfer_message_delete_seconds is None or message is None or not hasattr(message, "delete"):
             return
-        asyncio.create_task(self._delete_transfer_message_after_delay(message, packet_id, amount))
+        task = asyncio.create_task(self._delete_transfer_message_after_delay(message, packet_id, amount))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _delete_transfer_message_after_delay(self, message: Any, packet_id: str, amount: int) -> None:
         try:
@@ -452,12 +461,11 @@ class SendRedPacketModule:
     def _save_state(self) -> None:
         if self.state_path is None:
             return
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 1,
             "active_packets": [packet_to_dict(packet) for packet in self.active_packets.values()],
         }
-        self.state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json_atomic(self.state_path, payload)
         self._sync_card_config()
 
     def _resolve_path(self, value: str) -> Path:

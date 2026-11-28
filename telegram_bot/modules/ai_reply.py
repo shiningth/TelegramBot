@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import re
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -224,7 +225,11 @@ class AIReplyModule:
         except Exception as exc:
             logger.exception("AI chat failed (%s): %s", service_label, exc)
             elapsed_seconds = time.monotonic() - started_at
-            error_html = format_markdown_for_telegram(f"{service_label} API 出错：{exc}")
+            safe_exc = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@", r"\1***:***@", str(exc))
+            safe_exc = re.sub(r"bot\d+:[^/\s]+", "bot***", safe_exc)
+            error_html = format_markdown_for_telegram(
+                f"{service_label} API 出错（{type(exc).__name__}）：{truncate_text(safe_exc, 240)}"
+            )
             final_text = format_ai_group_message(
                 question_for_display,
                 error_html,
@@ -295,7 +300,10 @@ class AIReplyModule:
         if not provider.model:
             raise ValueError("AI 功能未配置 model，请在管理后台或 config.json 中配置。")
 
-        client = AsyncOpenAI(api_key=provider.api_key, base_url=provider.base_url.rstrip("/"), timeout=reply.timeout_seconds)
+        client_kwargs: dict[str, Any] = {"api_key": provider.api_key, "timeout": reply.timeout_seconds}
+        if (provider.base_url or "").strip():
+            client_kwargs["base_url"] = provider.base_url.rstrip("/")
+        client = AsyncOpenAI(**client_kwargs)
         input_items: list[dict[str, Any]] = []
         developer_prompt = build_developer_prompt(reply)
         if developer_prompt:
@@ -1109,23 +1117,45 @@ def format_ai_group_message(
     safe_answer = answer.strip() if answer_is_html else html.escape(truncate_text(answer.strip(), 2600))
     safe_model = html.escape(model.strip() or "unknown")
     safe_service = html.escape(service_label.strip() or "OpenAI Responses")
-    parts: list[str] = []
-    if quoted_text.strip():
-        safe_quoted = html.escape(truncate_text(quoted_text.strip(), 900))
-        parts.append("◔_◔ 引用消息：\n\n" f"<blockquote expandable>{safe_quoted}</blockquote>")
-    parts.append("◔_◔ 你问：\n\n" f"<blockquote expandable>{safe_question}</blockquote>")
-    parts.append(f"✨ <b>{safe_service}：</b>\n" f"<blockquote expandable>{safe_answer}</blockquote>")
-    if reasoning_html.strip():
-        parts.append("🧠 <b>思考摘要：</b>\n" f"<blockquote expandable>{reasoning_html}</blockquote>")
-    parts.append("──────────")
-    footer_lines = [f"<i>🚀 {html.escape(powered_by) if powered_by else safe_service + ' × ' + safe_model}</i>"]
-    if token_stats:
-        footer_lines.append(f"<i>📊 {html.escape(token_stats)}</i>")
-    if elapsed_seconds is not None:
-        footer_lines.append(f"<i>⏱️ Time: {max(0.0, elapsed_seconds):.1f}s</i>")
-    parts.append("\n".join(footer_lines))
-    parts.append(f"◆ 当前模型：<code>{safe_model}</code>")
-    return "\n\n".join(parts)
+
+    def _assemble(answer_body: str, reasoning_body: str) -> str:
+        parts: list[str] = []
+        if quoted_text.strip():
+            safe_quoted = html.escape(truncate_text(quoted_text.strip(), 900))
+            parts.append("◔_◔ 引用消息：\n\n" f"<blockquote expandable>{safe_quoted}</blockquote>")
+        parts.append("◔_◔ 你问：\n\n" f"<blockquote expandable>{safe_question}</blockquote>")
+        parts.append(f"✨ <b>{safe_service}：</b>\n" f"<blockquote expandable>{answer_body}</blockquote>")
+        if reasoning_body.strip():
+            parts.append("🧠 <b>思考摘要：</b>\n" f"<blockquote expandable>{reasoning_body}</blockquote>")
+        parts.append("──────────")
+        footer_lines = [f"<i>🚀 {html.escape(powered_by) if powered_by else safe_service + ' × ' + safe_model}</i>"]
+        if token_stats:
+            footer_lines.append(f"<i>📊 {html.escape(token_stats)}</i>")
+        if elapsed_seconds is not None:
+            footer_lines.append(f"<i>⏱️ Time: {max(0.0, elapsed_seconds):.1f}s</i>")
+        parts.append("\n".join(footer_lines))
+        parts.append(f"◆ 当前模型：<code>{safe_model}</code>")
+        return "\n\n".join(parts)
+
+    reasoning_body = reasoning_html.strip()
+    rendered = _assemble(safe_answer, reasoning_body)
+    if len(rendered) <= TELEGRAM_SAFE_TEXT_LIMIT:
+        return rendered
+
+    if reasoning_body:
+        reasoning_body = ""
+        rendered = _assemble(safe_answer, "")
+        if len(rendered) <= TELEGRAM_SAFE_TEXT_LIMIT:
+            return rendered
+
+    if answer_is_html:
+        plain_answer = html.unescape(re.sub(r"<[^>]+>", "", safe_answer)).strip()
+    else:
+        plain_answer = answer.strip()
+    overhead = len(_assemble("", ""))
+    budget = max(200, TELEGRAM_SAFE_TEXT_LIMIT - overhead - 16)
+    safe_plain_answer = html.escape(truncate_text(plain_answer, budget))
+    return _assemble(safe_plain_answer, "")
 
 
 def format_ai_setting_message(setting_name: str, value: Any) -> str:
@@ -1151,15 +1181,15 @@ def _media_file_name(message: Any) -> str:
 
 def _reply_config_from_dict(data: dict[str, Any]) -> AIReplyConfig:
     return AIReplyConfig(
-        system_prompt=str(data.get("system_prompt") or AIReplyConfig.system_prompt),
+        system_prompt=str(data["system_prompt"]) if data.get("system_prompt") is not None else AIReplyConfig.system_prompt,
         owner_user_ids=[int(item) for item in data.get("owner_user_ids", []) if str(item).strip()],
         command_prefixes=_clean_list(data.get("command_prefixes")),
         wake_words=_clean_list(data.get("wake_words")),
         reply_triggers=_clean_list(data.get("reply_triggers")),
-        context_limit=int(data.get("context_limit") or 6),
-        timeout_seconds=float(data.get("timeout_seconds") or 180.0),
-        max_tokens=int(data.get("max_tokens") or 25000),
-        temperature=float(data.get("temperature") or 0.7),
+        context_limit=int(data["context_limit"]) if data.get("context_limit") is not None else 6,
+        timeout_seconds=float(data["timeout_seconds"]) if data.get("timeout_seconds") is not None else 180.0,
+        max_tokens=int(data["max_tokens"]) if data.get("max_tokens") is not None else 25000,
+        temperature=float(data["temperature"]) if data.get("temperature") is not None else 0.7,
         reasoning_effort=str(data.get("reasoning_effort") or "none"),
         reasoning_summary=bool(data.get("reasoning_summary", True)),
         text_verbosity=str(data.get("text_verbosity") or "medium"),

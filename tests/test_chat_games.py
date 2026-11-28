@@ -226,3 +226,33 @@ def test_garbled_decode_renderer_creates_png(tmp_path: Path) -> None:
     render_garbled_decode_png("今天加鸡腿", output)
     assert output.exists()
     assert output.stat().st_size > 0
+
+
+def test_emoji_riddle_random_policy_waits_for_settlement(tmp_path: Path) -> None:
+    config = ChatGamesConfig(
+        lucky_word=LuckyWordConfig(enabled=False),
+        emoji_riddle=EmojiRiddleConfig(
+            duration_seconds=0.15,
+            winner_policy="random",
+            announce_answer=False,
+            items=[EmojiRiddleItemConfig("🔥 + 🧊", ["冰火"])],
+        ),
+        garbled_decode=GarbledDecodeConfig(enabled=False),
+    )
+    module = make_module(tmp_path, config)
+    client = FakeClient()
+
+    async def run_case() -> None:
+        await module.handle_message(FakeEvent(FakeMessage("/emoji 150", out=True, sender_id=99, message_id=61), client))
+        r1 = await module.handle_message(FakeEvent(FakeMessage("冰火", sender_id=10, message_id=62), client))
+        r2 = await module.handle_message(FakeEvent(FakeMessage("冰火", sender_id=20, message_id=63), client))
+        assert r1.status == "handled"
+        assert r2.status == "handled"
+        assert client.sent_messages == []
+        await asyncio.sleep(0.25)
+
+    asyncio.run(run_case())
+    assert len(client.sent_messages) == 1
+    assert client.sent_messages[0]["text"] == "+150"
+    assert client.sent_messages[0]["reply_to"] in {62, 63}
+    assert module.active_games == {}

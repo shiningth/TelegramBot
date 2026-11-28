@@ -121,17 +121,19 @@ const moduleViewMap = {
 document.querySelectorAll(".nav-item, .sub-nav-item").forEach((button) => {
   button.addEventListener("click", (event) => {
     const group = button.closest(".nav-group");
+    const subNav = group ? group.querySelector(".sub-nav") : null;
+    const hasVisibleSubNav = Boolean(subNav && !subNav.hidden);
     const isMobileNav = window.matchMedia("(max-width: 920px)").matches;
-    if (button.classList.contains("nav-parent") && group && isMobileNav && group.classList.contains("active") && group.classList.contains("expanded")) {
+    if (button.classList.contains("nav-parent") && group && hasVisibleSubNav && isMobileNav && group.classList.contains("active") && group.classList.contains("expanded")) {
       setGroupExpanded(group, false);
       return;
     }
-    if (button.classList.contains("nav-parent") && event.target.closest(".chevron")) {
+    if (button.classList.contains("nav-parent") && hasVisibleSubNav && event.target.closest(".chevron")) {
       setGroupExpanded(group, !group.classList.contains("expanded"));
       return;
     }
     const isSubNavItem = button.classList.contains("sub-nav-item");
-    if (group) setGroupExpanded(group, true);
+    if (group && hasVisibleSubNav) setGroupExpanded(group, true);
     showView(button.dataset.view);
     if (isMobileNav && isSubNavItem && group) setGroupExpanded(group, false);
   });
@@ -170,6 +172,7 @@ if (logRefreshIntervalInput) {
   logRefreshIntervalInput.addEventListener("change", handleLogRefreshIntervalChange);
 }
 document.getElementById("loadGroups").addEventListener("click", loadGroups);
+document.getElementById("monitorAllChats").addEventListener("change", updateGroupCount);
 bindSaveButton("saveGroups", saveGroups, "监听群组已保存并实时生效");
 document.getElementById("testTelegramCreds").addEventListener("click", () => {
   void testTelegramSettings();
@@ -266,8 +269,10 @@ function showView(viewId) {
   });
   document.querySelectorAll(".nav-group").forEach((group) => {
     const ownsView = Boolean(group.querySelector(`[data-view="${viewId}"]`));
+    const subNav = group.querySelector(".sub-nav");
+    const hasVisibleSubNav = Boolean(subNav && !subNav.hidden);
     group.classList.toggle("active", ownsView);
-    if (ownsView) setGroupExpanded(group, true);
+    if (ownsView) setGroupExpanded(group, hasVisibleSubNav);
     if (!ownsView && window.matchMedia("(max-width: 920px)").matches) setGroupExpanded(group, false);
   });
 
@@ -502,6 +507,7 @@ function renderStats(data) {
 async function refreshModules() {
   const data = await getJson("/api/modules");
   state.modules = data.modules || [];
+  syncModuleSidebar();
   const container = document.getElementById("moduleCards");
   container.innerHTML = "";
   state.modules.forEach((module) => {
@@ -544,6 +550,33 @@ async function refreshModules() {
     });
     container.appendChild(card);
   });
+}
+
+function syncModuleSidebar() {
+  const group = document.querySelector('.nav-group[data-group="modules"]');
+  if (!group) return;
+  const enabledViews = new Set();
+  state.modules.forEach((module) => {
+    if (!module || !module.enabled) return;
+    const viewId = moduleViewMap[module.id];
+    if (viewId) enabledViews.add(viewId);
+  });
+  let visibleCount = 0;
+  group.querySelectorAll(".sub-nav-item").forEach((item) => {
+    const visible = enabledViews.has(item.dataset.view);
+    item.hidden = !visible;
+    if (visible) visibleCount += 1;
+  });
+  const subNav = group.querySelector(".sub-nav");
+  const wasEmpty = subNav ? subNav.hidden : false;
+  if (subNav) subNav.hidden = visibleCount === 0;
+  const chevron = group.querySelector(".chevron");
+  if (chevron) chevron.hidden = visibleCount === 0;
+  if (visibleCount === 0) {
+    setGroupExpanded(group, false);
+  } else if (wasEmpty && !window.matchMedia("(max-width: 920px)").matches) {
+    setGroupExpanded(group, true);
+  }
 }
 
 function findModule(moduleId) {
@@ -2634,6 +2667,7 @@ async function runLogRefreshLoop() {
 async function refreshSettings() {
   const data = await getJson("/api/settings");
   state.settings = data;
+  document.getElementById("monitorAllChats").checked = data.telegram?.monitor_all === true;
   rememberGroupNamesFromConfig(data.telegram?.monitored_group_meta || {});
   if (!state.groups.length) {
     renderGroupsFromConfig(data.telegram.monitored_groups);
@@ -2757,7 +2791,7 @@ function networkProxyStateText(data) {
   if (!data) return "尚未读取状态";
   const parts = [];
   if (Array.isArray(data.env_override) && data.env_override.length) {
-    parts.push(`环境变量 ${data.env_override.join(" / ")} 也在生效`);
+    parts.push(`已配置环境变量 ${data.env_override.join(" / ")}，已保存的设置优先`);
   }
   if (data.active) parts.push(`代理已启用 ${data.proxy || ""}`.trim());
   else if (data.enabled) parts.push("已勾选启用，但没填代理地址");
@@ -2836,9 +2870,9 @@ async function saveNetworkSettings() {
   if (!changed.length) {
     setNetworkProxyResult(true, ["已保存（设置没有变化）。"]);
   } else if (result.restarting) {
-    setNetworkProxyResult(true, [`已保存并重连 Telegram（${changed.join(" / ")}）`, "几秒后刷新页面即可看到最新连接状态。"]);
+    setNetworkProxyResult(true, [`已保存，Telegram 将按新设置重连（${changed.join(" / ")}）`]);
   } else {
-    setNetworkProxyResult(true, [`已保存（${changed.join(" / ")}）`, "当前是直连；需要走代理时勾上「启用代理」。"]);
+    setNetworkProxyResult(true, [`已保存（${changed.join(" / ")}）`, networkProxyStateText(result)]);
   }
   return { ok: true };
 }
@@ -3130,7 +3164,10 @@ function updateGroupCount() {
 }
 
 function setGroupCount(count) {
-  document.getElementById("groupCount").textContent = `已选择 ${count} 个群组`;
+  const scope = document.getElementById("monitorAllChats").checked
+    ? "监听所有会话"
+    : count ? `已选择 ${count} 个群组` : "监听已暂停";
+  document.getElementById("groupCount").textContent = scope;
 }
 
 function renderSelectedGroupNames(groupIds = selectedGroups()) {
@@ -3235,11 +3272,15 @@ function saveGroupNameCache() {
 
 async function saveGroups() {
   const groups = selectedGroups();
-  const result = await putJson("/api/settings", { telegram: { monitored_groups: groups, monitored_group_meta: selectedGroupMeta(groups) } });
+  const monitorAll = document.getElementById("monitorAllChats").checked;
+  const result = await putJson("/api/settings", {
+    telegram: { monitored_groups: groups, monitored_group_meta: selectedGroupMeta(groups), monitor_all: monitorAll },
+  });
   state.settings = result.settings;
   rememberGroupNamesFromConfig(result.settings?.telegram?.monitored_group_meta || {});
   if (state.status?.telegram) {
     state.status.telegram.monitored_groups = groups;
+    state.status.telegram.monitor_all = monitorAll;
   }
   setGroupCount(groups.length);
   renderSelectedGroupNames(groups);
@@ -3637,6 +3678,7 @@ scheduleLogRefreshLoop();
   revertBtn.addEventListener("click", () => {
     if (!state) return hide();
     state.values.forEach((value, el) => restoreValue(el, value));
+    if (state.save.id === "saveGroups") updateGroupCount();
     hide();
   });
 

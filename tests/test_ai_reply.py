@@ -513,3 +513,25 @@ def test_ai_reply_chat_completions_channel_uses_chat_payload(tmp_path: Path) -> 
     assert powered_by == "Chat Completions API + Vision × gpt-5.6-sol"
     assert "Total: 15" in usage
     assert captured["closed"] is True
+
+
+def test_reply_config_from_dict_preserves_zero_and_empty_values() -> None:
+    cfg = ai_reply_module._reply_config_from_dict(
+        {"system_prompt": "", "context_limit": 0, "temperature": 0.0}
+    )
+    assert cfg.system_prompt == ""
+    assert cfg.context_limit == 0
+    assert cfg.temperature == 0.0
+
+
+def test_format_ai_group_message_truncates_long_html_without_breaking_tags() -> None:
+    long_html = "<b>开头</b> " + ("内容段落 " * 900) + "<a href='https://example.com'>尾链</a>"
+    rendered = format_ai_group_message(
+        "测试问题",
+        long_html,
+        "gpt-4o",
+        answer_is_html=True,
+        reasoning_html="<i>" + ("思考" * 300) + "</i>",
+    )
+    assert len(rendered) <= 3900
+    assert rendered.count("<blockquote expandable>") == rendered.count("</blockquote>")

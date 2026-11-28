@@ -272,21 +272,22 @@ class UserProfileModule:
             completed_backfill_groups = 0
             if self.chat_history is not None:
                 try:
-                    if history_scope == "all":
-                        archived_samples = collect_archived_profile_samples_across_chats(
-                            self.chat_history,
-                            monitored_chats,
-                            target_id,
-                            self.config.command_prefixes,
-                        )
-                        completed_backfill_groups = sum(
-                            bool(state and state.is_complete)
-                            for item in monitored_chats
-                            if (state := self.chat_history.get_backfill_state(item.chat_id)) is not None
-                        )
-                        backfill_complete = bool(monitored_chats) and completed_backfill_groups == len(monitored_chats)
-                    else:
-                        archived_samples = collect_archived_profile_samples(
+                    def _load_history_samples() -> tuple[list[ProfileSample], bool, int]:
+                        if history_scope == "all":
+                            loaded = collect_archived_profile_samples_across_chats(
+                                self.chat_history,
+                                monitored_chats,
+                                target_id,
+                                self.config.command_prefixes,
+                            )
+                            completed = sum(
+                                bool(state and state.is_complete)
+                                for item in monitored_chats
+                                if (state := self.chat_history.get_backfill_state(item.chat_id)) is not None
+                            )
+                            complete = bool(monitored_chats) and completed == len(monitored_chats)
+                            return loaded, complete, completed
+                        loaded = collect_archived_profile_samples(
                             self.chat_history,
                             chat_id,
                             target_id,
@@ -294,9 +295,15 @@ class UserProfileModule:
                             self.config.command_prefixes,
                             chat_username,
                         )
-                    if history_scope == "local":
-                        backfill_state = self.chat_history.get_backfill_state(chat_id)
-                        backfill_complete = bool(backfill_state and backfill_state.is_complete)
+                        complete = True
+                        if history_scope == "local":
+                            backfill_state = self.chat_history.get_backfill_state(chat_id)
+                            complete = bool(backfill_state and backfill_state.is_complete)
+                        return loaded, complete, 0
+
+                    archived_samples, backfill_complete, completed_backfill_groups = await asyncio.to_thread(
+                        _load_history_samples
+                    )
                 except Exception:
                     logger.exception(
                         "User profile database sample query failed; falling back to Telegram: chat_id=%s target_id=%s",
@@ -393,24 +400,10 @@ class UserProfileModule:
             profile = normalize_profile_result(raw_result, samples)
             if command.all_history and not backfill_complete:
                 profile = add_profile_coverage_warning(profile, history_scope)
-            rendered_html = render_profile_html(
-                profile,
-                target_label=target_label,
-                samples=samples,
-                model=self.ai_config.reply_provider.model,
-                total_tokens=total_tokens,
-            )
             phase = "publish_result"
             rich_published = False
             rich_delivery = ""
             try:
-                rendered_markdown = render_profile_rich_markdown(
-                    profile,
-                    target_label=target_label,
-                    samples=samples,
-                    model=self.ai_config.reply_provider.model,
-                    total_tokens=total_tokens,
-                )
                 rich_published = await self._try_edit_profile_rich_blocks(
                     event,
                     status_message,
@@ -435,6 +428,13 @@ class UserProfileModule:
                     if rich_published:
                         rich_delivery = "rich_blocks_send"
                 if not rich_published:
+                    rendered_markdown = render_profile_rich_markdown(
+                        profile,
+                        target_label=target_label,
+                        samples=samples,
+                        model=self.ai_config.reply_provider.model,
+                        total_tokens=total_tokens,
+                    )
                     rich_published = await self._try_edit_profile_rich_message(
                         event,
                         status_message,
@@ -460,6 +460,13 @@ class UserProfileModule:
                 published_message = status_message
                 delivery = rich_delivery
             else:
+                rendered_html = render_profile_html(
+                    profile,
+                    target_label=target_label,
+                    samples=samples,
+                    model=self.ai_config.reply_provider.model,
+                    total_tokens=total_tokens,
+                )
                 published_message = await self._edit_or_send(
                     event,
                     status_message,
@@ -494,11 +501,12 @@ class UserProfileModule:
             )
             self.card.metrics["failures"] = int(self.card.metrics.get("failures", 0)) + 1
             try:
+                user_detail = _clip(str(exc), 420) if isinstance(exc, (ValueError, TimeoutError)) else f"{type(exc).__name__}（详见后台日志）"
                 await self._edit_or_send(
                     event,
                     status_message,
                     replied,
-                    format_profile_status(f"生成失败：{_clip(str(exc), 420)}"),
+                    format_profile_status(f"生成失败：{user_detail}"),
                     phase="publish_failure",
                 )
             except Exception:
@@ -537,8 +545,11 @@ class UserProfileModule:
 
         if not command.target_ref or client is None or not hasattr(client, "get_entity"):
             return None, None
+        ref: Any = command.target_ref.strip()
+        if re.fullmatch(r"-?\d+", ref):
+            ref = int(ref)
         try:
-            return await client.get_entity(command.target_ref), None
+            return await client.get_entity(ref), None
         except Exception as exc:
             raise ValueError(f"找不到目标用户 {command.target_ref}") from exc
 
@@ -946,9 +957,17 @@ class UserProfileModule:
         timeout_seconds = max(0.001, float(self.config.timeout_seconds))
         started_at = time.monotonic()
         task = asyncio.create_task(self._generate_profile(prompt))
-        done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
-        if task in done:
-            return await task
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+            if task in done:
+                return await task
+        except asyncio.CancelledError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise
 
         task.cancel()
         try:
@@ -1831,6 +1850,10 @@ def render_profile_rich_markdown(
             f"| {'⭐' * rating.score} "
             f"| {_escape_rich_markdown(rating.comment or '仅代表当前样本。', table_cell=True)} |"
         )
+    if result.verdict:
+        lines.append("")
+        for item in result.verdict:
+            lines.append(f"- {_escape_rich_markdown(item)}")
 
     if result.closing:
         lines.extend(["", _escape_rich_markdown(result.closing)])
@@ -1973,6 +1996,8 @@ def build_profile_rich_message(
             ),
         ]
     )
+    for item in result.verdict:
+        detail_blocks.append(rich_types.PageBlockParagraph(text=plain(f"• {item}")))
     if result.closing:
         detail_blocks.append(rich_types.PageBlockParagraph(text=plain(result.closing)))
 
